@@ -38,7 +38,7 @@ async function generateWithColab(prompt, genre, duration) {
       {
         headers: { "Content-Type": "application/json" },
         responseType: "arraybuffer",
-        timeout: 300000,
+        timeout: 600000,
         validateStatus: () => true // ✔ HTTP hatalarını yakalamak için
       }
     );
