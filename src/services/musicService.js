@@ -27,18 +27,14 @@ async function generateWithHuggingFace(prompt, durationSeconds) {
 
   const response = await axios.post(
     `https://router.huggingface.co/hf-inference/models/${model}`,
+    { inputs: prompt },
     {
-      inputs: prompt,
-      parameters: {
-        duration: safeDuration,
-        guidance_scale: 3,
-        do_sample: true
-      }
-    },
-    {
-      headers: { 'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}` },
+      headers: {
+        'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
       responseType: 'arraybuffer',
-      timeout: 150000 // 2.5 dakika — model soğuk başlayabilir
+      timeout: 150000
     }
   );
 
