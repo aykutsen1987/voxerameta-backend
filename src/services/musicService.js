@@ -108,7 +108,8 @@ async function generateMusic({ musicPrompt, genre, duration, processedLyrics }) 
     try {
       return await generateWithHuggingFace(musicPrompt, duration);
     } catch (err) {
-      console.warn(`⚠️  HuggingFace başarısız: ${err.message} — Stability AI deneniyor...`);
+      const detail = err.response?.data ? Buffer.from(err.response.data).toString('utf8') : '';
+      console.warn(`⚠️  HuggingFace başarısız: ${err.message} | Detay: ${detail} — Stability AI deneniyor...`);
     }
   }
 
