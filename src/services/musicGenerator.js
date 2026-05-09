@@ -31,8 +31,8 @@ async function convertPoetryToSong(lyrics, genre, language) {
 async function generateWithHuggingFace(prompt, durationSeconds) {
   if (!process.env.HUGGINGFACE_API_KEY) throw new Error('HuggingFace API key eksik');
   console.log('🎵 HuggingFace MusicGen ile üretiliyor...');
-  const model = durationSeconds > 120 ? 'facebook/musicgen-medium' : 'facebook/musicgen-small';
-  const response = await axios.post(`https://api-inference.huggingface.co/models/${model}`,
+  const model = 'facebook/musicgen-small'; // small daha stabil, medium sık 404 veriyor
+  const response = await axios.post(`https://router.huggingface.co/hf-inference/models/${model}`,
     { inputs: prompt, parameters: { duration: Math.min(durationSeconds, 30), guidance_scale: 3, do_sample: true } },
     { headers: { 'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}` }, responseType: 'arraybuffer', timeout: 120000 }
   );
@@ -44,17 +44,17 @@ async function generateWithHuggingFace(prompt, durationSeconds) {
 
 // ── 3. REPLICATE: MusicGen Fallback ──────────────────────────
 async function generateWithReplicate(prompt, durationSeconds) {
-  if (!process.env.REPLICATE_API_KEY) throw new Error('Replicate API key eksik');
+  if (!process.env.REPLICATE_API_TOKEN) throw new Error('Replicate API key eksik');
   console.log('🎵 Replicate ile üretiliyor...');
   const startRes = await axios.post('https://api.replicate.com/v1/predictions', {
     version: 'b05b1dff1d8c6dc63d14b0cdb42135378dcb87f6942d2d4ed'+'f3ca6523a5b7a4e',
     input: { prompt, model_version: 'melody', duration: Math.min(durationSeconds, 30), output_format: 'mp3' }
-  }, { headers: { 'Authorization': `Token ${process.env.REPLICATE_API_KEY}` }, timeout: 30000 });
+  }, { headers: { 'Authorization': `Token ${process.env.REPLICATE_API_TOKEN}` }, timeout: 30000 });
   const predId = startRes.data.id;
   for (let i = 0; i < 60; i++) {
     await new Promise(r => setTimeout(r, 3000));
     const res = await axios.get(`https://api.replicate.com/v1/predictions/${predId}`,
-      { headers: { 'Authorization': `Token ${process.env.REPLICATE_API_KEY}` } });
+      { headers: { 'Authorization': `Token ${process.env.REPLICATE_API_TOKEN}` } });
     if (res.data.status === 'succeeded' && res.data.output) {
       const audioUrl = Array.isArray(res.data.output) ? res.data.output[0] : res.data.output;
       const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer', timeout: 60000 });
@@ -71,9 +71,9 @@ async function generateWithReplicate(prompt, durationSeconds) {
 async function generateWithStability(prompt, durationSeconds) {
   if (!process.env.STABILITY_API_KEY) throw new Error('Stability API key eksik');
   console.log('🎵 Stability AI ile üretiliyor...');
-  const response = await axios.post('https://api.stability.ai/v2beta/audio/stable-audio/generate',
+  const response = await axios.post('https://api.stability.ai/v2beta/stable-audio/generate',
     { prompt, seconds_start: 0, seconds_total: Math.min(durationSeconds, 45), cfg_scale: 7 },
-    { headers: { 'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`, 'Accept': 'audio/mpeg' }, responseType: 'arraybuffer', timeout: 120000 }
+    { headers: { 'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' }, responseType: 'arraybuffer', timeout: 120000 }
   );
   const filename = `${uuidv4()}.mp3`;
   fs.writeFileSync(path.join(SONGS_DIR, filename), Buffer.from(response.data));
