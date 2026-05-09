@@ -21,7 +21,7 @@ async function generateWithHuggingFace(prompt, durationSeconds) {
   if (!process.env.HUGGINGFACE_API_KEY) throw new Error('HuggingFace key eksik');
 
   const safeDuration = Math.min(durationSeconds, 30);
-  const model = 'facebook/musicgen-small';
+  const model = 'facebook/musicgen-stereo-small';  // hf-inference destekli model
 
   console.log(`🎵 HuggingFace ${model} ile müzik üretiliyor... (${safeDuration}sn)`);
 
