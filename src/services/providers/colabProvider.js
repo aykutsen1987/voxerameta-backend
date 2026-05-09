@@ -1,97 +1,129 @@
 // ============================================================
-// VoxeraMeta — Colab MusicGen Provider
-// POST https://<ngrok-url>/generate-music
-// input : { prompt, genre, duration }
-// output: audio binary (wav/mp3) veya { audio_url: "..." }
+// VoxeraMeta — Colab MusicGen Provider (FIXED VERSION)
 // ============================================================
 
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const { v4: uuidv4 } = require('uuid');
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+const { v4: uuidv4 } = require("uuid");
 
-const SONGS_DIR = process.env.LOCAL_STORAGE_PATH || '/tmp/voxerameta-songs';
+const SONGS_DIR =
+  process.env.LOCAL_STORAGE_PATH || "/tmp/voxerameta-songs";
 
-/**
- * Google Colab üzerinde çalışan MusicGen Flask/FastAPI sunucusuna istek atar.
- *
- * Colab endpoint'i iki farklı yanıt formatı döndürebilir:
- *   A) Binary audio (Content-Type: audio/*) — doğrudan WAV/MP3 baytları
- *   B) JSON  { audio_url: "https://..." }   — indirilecek URL
- *
- * Her iki format da desteklenmektedir.
- *
- * @param {string} prompt      - Müzik stil açıklaması
- * @param {string} genre       - POP | RAP | SLOW | LOFI | ACOUSTIC
- * @param {number} duration    - Saniye cinsinden süre (Colab kısıtlamasına göre kırpılır)
- * @returns {{ filename, audioUrl, provider, model }}
- */
+if (!fs.existsSync(SONGS_DIR)) {
+  fs.mkdirSync(SONGS_DIR, { recursive: true });
+}
+
 async function generateWithColab(prompt, genre, duration) {
   const colabUrl = process.env.COLAB_MUSIC_API_URL;
-  if (!colabUrl) throw new Error('COLAB_MUSIC_API_URL env değişkeni tanımlı değil');
 
-  const safeDuration = Math.min(duration, 30); // MusicGen-small max ~30sn
+  if (!colabUrl) {
+    throw new Error("COLAB_MUSIC_API_URL env değişkeni tanımlı değil");
+  }
 
-  console.log(`🎵 [Colab MusicGen] İstek gönderiliyor → ${colabUrl}`);
-  console.log(`   Prompt  : ${prompt.substring(0, 80)}...`);
+  const safeDuration = Math.min(Number(duration || 15), 30);
+
+  // ✔ URL FIX (slash problemi çözülmüş)
+  const baseUrl = colabUrl.replace(/\/$/, "");
+  const url = `${baseUrl}/generate-music`;
+
+  console.log(`🎵 [Colab MusicGen] İstek → ${url}`);
+  console.log(`   Prompt  : ${prompt?.substring(0, 80)}...`);
   console.log(`   Genre   : ${genre} | Duration: ${safeDuration}s`);
 
-  // ── İstek ────────────────────────────────────────────────────
-  const response = await axios.post(
-  `${colabUrl}/generate-music`,
-  { prompt, genre, duration: safeDuration },
-  {
-    headers: { 'Content-Type': 'application/json' },
-    responseType: 'arraybuffer',
-    timeout: 300000
-  }
-);
-
-  if (response.status !== 200) {
-    throw new Error(`Colab MusicGen HTTP ${response.status}`);
-  }
-
-  const contentType = response.headers['content-type'] || '';
-
-  // ── Senaryo A: Binary Audio ───────────────────────────────────
-  if (contentType.startsWith('audio/')) {
-    const ext = contentType.includes('mpeg') ? 'mp3' : 'wav';
-    const filename = `colab_${uuidv4()}.${ext}`;
-    const filepath = path.join(SONGS_DIR, filename);
-    fs.writeFileSync(filepath, Buffer.from(response.data));
-
-    const audioUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/songs/${filename}`;
-    console.log(`✅ [Colab MusicGen] Binary audio alındı: ${filename}`);
-    return { filename, audioUrl, provider: 'colab_musicgen', model: 'musicgen' };
-  }
-
-  // ── Senaryo B: JSON { audio_url } ────────────────────────────
   try {
-    const json = JSON.parse(Buffer.from(response.data).toString('utf8'));
+    const response = await axios.post(
+      url,
+      { prompt, genre, duration: safeDuration },
+      {
+        headers: { "Content-Type": "application/json" },
+        responseType: "arraybuffer",
+        timeout: 300000,
+        validateStatus: () => true // ✔ HTTP hatalarını yakalamak için
+      }
+    );
 
-    if (json.audio_url) {
-      // Uzak URL'den indir
-      const dlRes = await axios.get(json.audio_url, {
-        responseType: 'arraybuffer',
-        timeout: 120_000
-      });
-      const ext = json.audio_url.endsWith('.mp3') ? 'mp3' : 'wav';
-      const filename = `colab_${uuidv4()}.${ext}`;
-      const filepath = path.join(SONGS_DIR, filename);
-      fs.writeFileSync(filepath, Buffer.from(dlRes.data));
+    const contentType = response.headers["content-type"] || "";
 
-      const audioUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/songs/${filename}`;
-      console.log(`✅ [Colab MusicGen] URL üzerinden audio indirildi: ${filename}`);
-      return { filename, audioUrl, provider: 'colab_musicgen', model: 'musicgen' };
+    // ❌ HTTP error kontrol
+    if (response.status !== 200) {
+      const text = Buffer.from(response.data).toString("utf8");
+      throw new Error(
+        `Colab HTTP ${response.status} | ${text.slice(0, 200)}`
+      );
     }
 
-    if (json.error) throw new Error(`Colab hata mesajı: ${json.error}`);
-  } catch (parseErr) {
-    // JSON parse başarısız → bilinmeyen format
-    throw new Error(`Colab bilinmeyen yanıt formatı: ${parseErr.message}`);
-  }
+    // =========================================================
+    // ✔ CASE 1: AUDIO (wav/mp3)
+    // =========================================================
+    if (contentType.startsWith("audio/")) {
+      const ext = contentType.includes("mpeg") ? "mp3" : "wav";
+      const filename = `colab_${uuidv4()}.${ext}`;
+      const filepath = path.join(SONGS_DIR, filename);
 
-  throw new Error('Colab yanıtı ne binary audio ne de {audio_url} içeriyor');
+      fs.writeFileSync(filepath, Buffer.from(response.data));
+
+      const audioUrl = `${
+        process.env.BASE_URL || "http://localhost:3000"
+      }/songs/${filename}`;
+
+      console.log(`✅ Audio saved: ${filename}`);
+
+      return {
+        filename,
+        audioUrl,
+        provider: "colab_musicgen",
+        model: "musicgen"
+      };
+    }
+
+    // =========================================================
+    // ✔ CASE 2: JSON RESPONSE
+    // =========================================================
+    const text = Buffer.from(response.data).toString("utf8");
+
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      throw new Error("Colab response JSON parse edilemedi");
+    }
+
+    if (json.audio_url) {
+      const dlRes = await axios.get(json.audio_url, {
+        responseType: "arraybuffer",
+        timeout: 120000
+      });
+
+      const ext = json.audio_url.includes(".mp3") ? "mp3" : "wav";
+      const filename = `colab_${uuidv4()}.${ext}`;
+      const filepath = path.join(SONGS_DIR, filename);
+
+      fs.writeFileSync(filepath, Buffer.from(dlRes.data));
+
+      const audioUrl = `${
+        process.env.BASE_URL || "http://localhost:3000"
+      }/songs/${filename}`;
+
+      console.log(`✅ Audio downloaded from URL`);
+
+      return {
+        filename,
+        audioUrl,
+        provider: "colab_musicgen",
+        model: "musicgen"
+      };
+    }
+
+    if (json.error) {
+      throw new Error(`Colab error: ${json.error}`);
+    }
+
+    throw new Error("Colab invalid response format");
+  } catch (err) {
+    console.error("❌ Colab error:", err.message);
+    throw err;
+  }
 }
 
 module.exports = { generateWithColab };
