@@ -20,16 +20,13 @@ if (!fs.existsSync(SONGS_DIR)) {
 async function generateWithHuggingFace(prompt, durationSeconds) {
   if (!process.env.HUGGINGFACE_API_KEY) throw new Error('HuggingFace key eksik');
 
-  // max 30 saniye (HF ücretsiz limit)
   const safeDuration = Math.min(durationSeconds, 30);
-  const model = safeDuration > 15
-    ? 'facebook/musicgen-medium'
-    : 'facebook/musicgen-small';
+  const model = 'facebook/musicgen-small';
 
   console.log(`🎵 HuggingFace ${model} ile müzik üretiliyor... (${safeDuration}sn)`);
 
   const response = await axios.post(
-    `https://api-inference.huggingface.co/models/${model}`,
+    `https://router.huggingface.co/hf-inference/models/${model}`,
     {
       inputs: prompt,
       parameters: {
@@ -59,7 +56,7 @@ async function generateWithHuggingFace(prompt, durationSeconds) {
 // ── 2. Stability AI — Stable Audio (25 ücretsiz/gün) ─────────
 // API Docs: https://platform.stability.ai/docs/api-reference#tag/Generate/paths/~1v2beta~1stable-audio~1generate/post
 async function generateWithStabilityAI(prompt, durationSeconds) {
-  if (!process.env.STABILITY_AI_API_KEY) throw new Error('Stability AI key eksik');
+  if (!process.env.STABILITY_API_KEY) throw new Error('Stability AI key eksik');
 
   // Stable Audio max 90 saniye destekler ama ücretsiz kredili kullanırken 45sn önerilir
   const safeDuration = Math.min(durationSeconds, 45);
@@ -75,7 +72,7 @@ async function generateWithStabilityAI(prompt, durationSeconds) {
     },
     {
       headers: {
-        'Authorization': `Bearer ${process.env.STABILITY_AI_API_KEY}`,
+        'Authorization': `Bearer ${process.env.STABILITY_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'audio/*'
       },
@@ -120,7 +117,7 @@ async function generateMusic({ musicPrompt, genre, duration, processedLyrics }) 
   }
 
   // 2. Stability AI Stable Audio fallback
-  if (process.env.STABILITY_AI_API_KEY) {
+  if (process.env.STABILITY_API_KEY) {
     try {
       return await generateWithStabilityAI(musicPrompt, duration);
     } catch (err) {
@@ -161,7 +158,7 @@ function getProviderStatus() {
     },
     stability_ai: {
       name: 'Stability AI Stable Audio (Müzik — 2. öncelik)',
-      isAvailable: !!process.env.STABILITY_AI_API_KEY,
+      isAvailable: !!process.env.STABILITY_API_KEY,
       limit: '25 kredi/gün (ücretsiz)',
       cost: 'Ücretsiz (25/gün) — opsiyonel API key'
     }
