@@ -33,8 +33,8 @@ async function generateWithHuggingFace(prompt, durationSeconds) {
   console.log('🎵 HuggingFace MusicGen ile üretiliyor...');
   const model = 'facebook/musicgen-small'; // small daha stabil, medium sık 404 veriyor
   const response = await axios.post(`https://router.huggingface.co/hf-inference/models/${model}`,
-    { inputs: prompt, parameters: { duration: Math.min(durationSeconds, 30), guidance_scale: 3, do_sample: true } },
-    { headers: { 'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}` }, responseType: 'arraybuffer', timeout: 120000 }
+    { inputs: prompt },
+    { headers: { 'Authorization': `Bearer ${process.env.HUGGINGFACE_API_KEY}`, 'Content-Type': 'application/json' }, responseType: 'arraybuffer', timeout: 120000 }
   );
   if (response.status !== 200) throw new Error(`HuggingFace hata: ${response.status}`);
   const filename = `${uuidv4()}.wav`;
