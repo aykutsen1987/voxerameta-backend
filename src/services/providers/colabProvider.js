@@ -38,15 +38,14 @@ async function generateWithColab(prompt, genre, duration) {
 
   // ── İstek ────────────────────────────────────────────────────
   const response = await axios.post(
-    colabUrl,
-    { prompt, genre, duration: safeDuration },
-    {
-      headers: { 'Content-Type': 'application/json' },
-      // İlk olarak arraybuffer dene; JSON yanıt gelmişse Buffer'dan parse ederiz
-      responseType: 'arraybuffer',
-      timeout: 300_000 // Colab cold-start için 5 dakika
-    }
-  );
+  `${colabUrl}/generate-music`,
+  { prompt, genre, duration: safeDuration },
+  {
+    headers: { 'Content-Type': 'application/json' },
+    responseType: 'arraybuffer',
+    timeout: 300000
+  }
+);
 
   if (response.status !== 200) {
     throw new Error(`Colab MusicGen HTTP ${response.status}`);
