@@ -2,6 +2,7 @@ services:
   - type: web
     name: voxerameta-backend
     env: node
+    rootDir: backend
     buildCommand: npm install
     startCommand: node src/server.js
     plan: free
@@ -26,9 +27,6 @@ services:
         sync: false
       - key: BASE_URL
         sync: false
-      # ÖNEMLİ: BASE_URL = https://voxerameta-ai-backend.onrender.com
-      # (Render dashboard → Environment → BASE_URL olarak ekle)
-      # RENDER_EXTERNAL_URL Render tarafından otomatik set edilir (fallback)
       - key: LOCAL_STORAGE_PATH
         value: /tmp/voxerameta-songs
       - key: MAX_REQUESTS_PER_MINUTE
