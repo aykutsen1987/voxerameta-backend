@@ -1,6 +1,6 @@
 // ============================================================
-// VoxeraMeta — Replicate Provider (Opsiyonel — future)
-// Replicate üzerinde MusicGen veya AudioCraft modeli
+// VoxeraMeta — Local Provider (Gelecek: self-host MusicGen)
+// Kendi sunucunda veya Docker container'ında çalışan endpoint
 // ============================================================
 
 const axios = require('axios');
@@ -10,65 +10,53 @@ const { v4: uuidv4 } = require('uuid');
 
 const SONGS_DIR = process.env.LOCAL_STORAGE_PATH || '/tmp/voxerameta-songs';
 
-// Replicate MusicGen model versiyonu (güncel versiyon için kontrol edin)
-const REPLICATE_MODEL_VERSION =
-  process.env.REPLICATE_MODEL_VERSION ||
-  'b05b1dff1d8c6dc63d14b0cdb42135378dcb87f6942d2d4edf3ca6523a5b7a4e';
-
 /**
- * Replicate API üzerinde MusicGen çalıştırır (polling modeli).
- * REPLICATE_API_TOKEN env değişkeni gereklidir.
+ * Yerel / self-host MusicGen veya benzeri servise bağlanır.
+ * LOCAL_MUSIC_API_URL env değişkeni ile yapılandırılır.
+ * API contract Colab provider ile aynıdır:
+ *   POST <url>  { prompt, genre, duration }
+ *   → binary audio  VEYA  { audio_url }
+ *
+ * @param {string} prompt
+ * @param {string} genre
+ * @param {number} duration
  */
-async function generateWithReplicate(prompt, genre, duration) {
-  const token = process.env.REPLICATE_API_TOKEN;
-  if (!token) throw new Error('REPLICATE_API_TOKEN env değişkeni tanımlı değil');
+async function generateWithLocal(prompt, genre, duration) {
+  const localUrl = process.env.LOCAL_MUSIC_API_URL;
+  if (!localUrl) throw new Error('LOCAL_MUSIC_API_URL env değişkeni tanımlı değil');
 
-  const safeDuration = Math.min(duration, 30);
-  console.log(`🎵 [Replicate] İstek başlatılıyor...`);
+  console.log(`🎵 [Local Provider] İstek gönderiliyor → ${localUrl}`);
 
-  const startRes = await axios.post(
-    'https://api.replicate.com/v1/predictions',
-    {
-      version: REPLICATE_MODEL_VERSION,
-      input: {
-        prompt,
-        model_version: 'melody',
-        duration: safeDuration,
-        output_format: 'mp3'
-      }
-    },
-    {
-      headers: { Authorization: `Token ${token}`, 'Content-Type': 'application/json' },
-      timeout: 30_000
-    }
+  const response = await axios.post(
+    localUrl,
+    { prompt, genre, duration: Math.min(duration, 30) },
+    { responseType: 'arraybuffer', timeout: 180_000 }
   );
 
-  const predId = startRes.data.id;
-  console.log(`   Prediction ID: ${predId}`);
+  if (response.status !== 200) throw new Error(`Local Provider HTTP ${response.status}`);
 
-  // Polling — max 3 dakika
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 3_000));
-    const poll = await axios.get(`https://api.replicate.com/v1/predictions/${predId}`, {
-      headers: { Authorization: `Token ${token}` }
-    });
+  const contentType = response.headers['content-type'] || '';
 
-    if (poll.data.status === 'succeeded' && poll.data.output) {
-      const audioUrl = Array.isArray(poll.data.output) ? poll.data.output[0] : poll.data.output;
-      const dlRes = await axios.get(audioUrl, { responseType: 'arraybuffer', timeout: 60_000 });
-      const filename = `replicate_${uuidv4()}.mp3`;
-      fs.writeFileSync(path.join(SONGS_DIR, filename), Buffer.from(dlRes.data));
-      const serveUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/songs/${filename}`;
-      console.log(`✅ [Replicate] Audio alındı: ${filename}`);
-      return { filename, audioUrl: serveUrl, provider: 'replicate_musicgen', model: 'musicgen-melody' };
-    }
-
-    if (poll.data.status === 'failed') {
-      throw new Error(`Replicate başarısız: ${poll.data.error}`);
-    }
+  if (contentType.startsWith('audio/')) {
+    const ext = contentType.includes('mpeg') ? 'mp3' : 'wav';
+    const filename = `local_${uuidv4()}.${ext}`;
+    fs.writeFileSync(path.join(SONGS_DIR, filename), Buffer.from(response.data));
+    const audioUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/songs/${filename}`;
+    console.log(`✅ [Local Provider] Audio alındı: ${filename}`);
+    return { filename, audioUrl, provider: 'local_musicgen', model: 'musicgen-local' };
   }
 
-  throw new Error('Replicate zaman aşımı (3 dakika)');
+  // JSON fallback
+  const json = JSON.parse(Buffer.from(response.data).toString('utf8'));
+  if (json.audio_url) {
+    const dlRes = await axios.get(json.audio_url, { responseType: 'arraybuffer', timeout: 60_000 });
+    const filename = `local_${uuidv4()}.wav`;
+    fs.writeFileSync(path.join(SONGS_DIR, filename), Buffer.from(dlRes.data));
+    const audioUrl = `${process.env.BASE_URL || 'http://localhost:3000'}/songs/${filename}`;
+    return { filename, audioUrl, provider: 'local_musicgen', model: 'musicgen-local' };
+  }
+
+  throw new Error('Local Provider bilinmeyen yanıt formatı');
 }
 
-module.exports = { generateWithReplicate };
+module.exports = { generateWithLocal };
