@@ -1,19 +1,18 @@
 // ============================================================
-// VoxeraMeta — Müzik Üretim Servisi (Render Mimarisi)
+// VoxeraMeta — Müzik Üretim Servisi v4.0
 //
-// Provider Zinciri (öncelik sırasıyla):
-//   1. Colab MusicGen   — COLAB_MUSIC_API_URL varsa
-//   2. Local Self-Host  — LOCAL_MUSIC_API_URL varsa
-//   3. Replicate        — REPLICATE_API_TOKEN varsa
+// v4 mimarisinde Colab'a DOĞRUDAN bağlantı yok.
+// Colab iletişimi jobQueue + /api/colab/* route'ları üzerinden.
 //
-// NOT: Bu dosya RENDER'da çalışır. Colab notebook'ta kullanılmaz.
-//      Gemini 2.5 Flash / Groq / OpenRouter → freeAiService.js (lyrics)
+// Bu servis:
+//   - Local Self-Host  — LOCAL_MUSIC_API_URL varsa
+//   - Replicate        — REPLICATE_API_TOKEN varsa
+//   - getProviderStatus() — health endpoint için durum raporu
 // ============================================================
 
 'use strict';
 
 const fs = require('fs');
-const { generateWithColab }     = require('./providers/colabProvider');
 const { generateWithLocal }     = require('./providers/localProvider');
 const { generateWithReplicate } = require('./providers/replicateProvider');
 
@@ -22,98 +21,75 @@ if (!fs.existsSync(SONGS_DIR)) fs.mkdirSync(SONGS_DIR, { recursive: true });
 
 const PROVIDER_CHAIN = [
   {
-    name: 'colab_musicgen',
-    isEnabled: () => !!process.env.COLAB_MUSIC_API_URL,
-    generateFn: generateWithColab
+    name:       'local_musicgen',
+    isEnabled:  () => !!process.env.LOCAL_MUSIC_API_URL,
+    generateFn: generateWithLocal,
   },
   {
-    name: 'local_musicgen',
-    isEnabled: () => !!process.env.LOCAL_MUSIC_API_URL,
-    generateFn: generateWithLocal
+    name:       'replicate_musicgen',
+    isEnabled:  () => !!process.env.REPLICATE_API_TOKEN,
+    generateFn: generateWithReplicate,
   },
-  {
-    name: 'replicate_musicgen',
-    isEnabled: () => !!process.env.REPLICATE_API_TOKEN,
-    generateFn: generateWithReplicate
-  }
 ];
 
-async function generateMusic({ musicPrompt, genre, duration, processedLyrics }) {
-  const enabledProviders = PROVIDER_CHAIN.filter(p => p.isEnabled());
-
-  if (enabledProviders.length === 0) {
+async function generateMusic({ musicPrompt, genre, duration }) {
+  const enabled = PROVIDER_CHAIN.filter(p => p.isEnabled());
+  if (enabled.length === 0) {
     throw new Error(
-      'Hiçbir müzik provider aktif değil. ' +
-      "Render Dashboard'a COLAB_MUSIC_API_URL ekleyin. " +
-      'Detaylar: RENDER_ENV_SETUP.md'
+      'Enstrümantal provider aktif değil. ' +
+      'Ana pipeline Colab Worker üzerinden çalışır (jobQueue).'
     );
   }
-
   const errors = [];
-  for (const provider of enabledProviders) {
+  for (const p of enabled) {
     try {
-      console.log(`🎵 [MusicService] Provider deneniyor: ${provider.name}`);
-      const result = await provider.generateFn(musicPrompt, genre, duration);
-      console.log(`✅ [MusicService] Başarılı: ${provider.name}`);
-      return result;
+      console.log(`🎵 [MusicService] Provider: ${p.name}`);
+      return await p.generateFn(musicPrompt, genre, duration);
     } catch (err) {
-      console.warn(`⚠️  [MusicService] ${provider.name} başarısız: ${err.message}`);
-      errors.push(`${provider.name}: ${err.message}`);
+      console.warn(`⚠️  [MusicService] ${p.name} başarısız: ${err.message}`);
+      errors.push(`${p.name}: ${err.message}`);
     }
   }
-
-  throw new Error(
-    "Tüm müzik provider'ları başarısız:\n" +
-    errors.map(e => `  • ${e}`).join('\n') + '\n' +
-    'Colab notebook çalışıyor mu? ngrok URL güncel mi?'
-  );
+  throw new Error('Tüm provider\'lar başarısız:\n' + errors.join('\n'));
 }
 
 function getProviderStatus() {
   return {
     lyrics: {
       groq: {
-        name: 'Groq — llama-3.3-70b (Lyrics, 1. öncelik)',
+        name:        'Groq — llama-3.3-70b',
         isAvailable: !!process.env.GROQ_API_KEY,
-        limit: '1.000 istek/gün',
-        cost: 'Ücretsiz'
+        cost:        'Ücretsiz',
       },
       openrouter: {
-        name: 'OpenRouter :free (Lyrics, 2. öncelik)',
+        name:        'OpenRouter :free',
         isAvailable: !!process.env.OPENROUTER_API_KEY,
-        limit: '200 istek/gün',
-        cost: 'Ücretsiz'
+        cost:        'Ücretsiz',
       },
       gemini: {
-        name: 'Google Gemini 2.5 Flash (Lyrics, 3. öncelik)',
+        name:        'Google Gemini 2.5 Flash',
         isAvailable: !!process.env.GEMINI_API_KEY,
-        limit: '500 istek/gün',
-        cost: 'Ücretsiz'
-      }
+        cost:        'Ücretsiz',
+      },
     },
     music: {
-      colab_musicgen: {
-        name: 'Colab MusicGen + RVC (ANA PROVIDER)',
-        isAvailable: !!process.env.COLAB_MUSIC_API_URL,
-        url: process.env.COLAB_MUSIC_API_URL
-          ? process.env.COLAB_MUSIC_API_URL.replace(/\/(generate-music|generate-song)$/, '')
-          : null,
-        limit: 'Colab GPU limiti (T4 ~12saat/gün)',
-        cost: 'Ücretsiz (Google Colab)'
+      colab_worker: {
+        name:        'Colab Worker — RVC + MusicGen (Ana Pipeline)',
+        isAvailable: !!process.env.COLAB_SECRET,
+        note:        'Async kuyruk — ngrok URL gerekmez',
+        cost:        'Ücretsiz (Google Colab)',
       },
       local_musicgen: {
-        name: 'Local Self-Host MusicGen (2. öncelik)',
+        name:        'Local Self-Host MusicGen',
         isAvailable: !!process.env.LOCAL_MUSIC_API_URL,
-        limit: 'Kendi sunucu kapasitesi',
-        cost: 'Ücretsiz'
+        cost:        'Ücretsiz',
       },
       replicate_musicgen: {
-        name: 'Replicate MusicGen (3. öncelik — opsiyonel)',
+        name:        'Replicate MusicGen (opsiyonel)',
         isAvailable: !!process.env.REPLICATE_API_TOKEN,
-        limit: 'Replicate ücretsiz tier',
-        cost: 'Ücretsiz tier / kullanıma göre'
-      }
-    }
+        cost:        'Ücretsiz tier',
+      },
+    },
   };
 }
 
