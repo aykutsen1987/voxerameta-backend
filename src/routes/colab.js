@@ -41,7 +41,7 @@ function colabAuth(req, res, next) {
 
 // ── POST /api/colab/callback ──────────────────────────────────
 // Colab pipeline tamamlandı, ses dosyasını gönderdi
-router.post('/callback', upload.single('file'), colabAuth, (req, res) => {
+router.post('/callback', upload.single('audio'), colabAuth, (req, res) => {
   const jobId = req.body.job_id;
   if (!jobId) {
     return res.status(400).json({ error: 'job_id gerekli' });
