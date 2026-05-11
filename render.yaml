@@ -17,7 +17,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: COLAB_MUSIC_API_URL
+      - key: COLAB_URL
         sync: false
       - key: LOCAL_MUSIC_API_URL
         sync: false
