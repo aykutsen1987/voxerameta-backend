@@ -22,6 +22,7 @@ const { errorHandler }  = require('./middleware/errorHandler');
 const { authMiddleware } = require('./middleware/auth');
 
 const app  = express();
+app.set('trust proxy', 1); // Bu satırı ekle
 const PORT = process.env.PORT || 3000;
 
 // Depolama dizini
