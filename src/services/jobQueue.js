@@ -74,7 +74,11 @@ async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics
       console.error(`❌ [Queue] PUSH hazırlık hatası: ${err.message}`);
     }
   } else {
-    console.warn(`⚠️ [Queue] COLAB_URL tanımlı değil, iş beklemede kalacak.`);
+    console.warn(`⚠️ [Queue] COLAB_URL tanımlı değil!`);
+    console.warn(`   → Render Dashboard'da COLAB_URL = <ngrok-url>/process şeklinde ekleyin.`);
+    console.warn(`   → Colab hücresini çalıştırınca URL ekranda görünür.`);
+    job.status = STATUS.PENDING;
+    pending.push(jobId);
   }
 
   return job;

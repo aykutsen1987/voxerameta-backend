@@ -17,15 +17,17 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: COLAB_SECRET
+        sync: false          # ← Colab notebook'taki COLAB_SECRET ile AYNI olmalı
       - key: COLAB_URL
-        sync: false
+        sync: false          # ← Colab çalıştıktan sonra buraya ngrok URL/process yaz
+      - key: BASE_URL
+        value: https://voxerameta-ai-backend.onrender.com
       - key: LOCAL_MUSIC_API_URL
         sync: false
       - key: REPLICATE_API_TOKEN
         sync: false
       - key: API_AUTH_TOKEN
-        sync: false
-      - key: BASE_URL
         sync: false
       - key: LOCAL_STORAGE_PATH
         value: /tmp/voxerameta-songs
