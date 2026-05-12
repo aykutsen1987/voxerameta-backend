@@ -28,7 +28,9 @@ const jobs    = new Map();
 const pending = [];
 
 // ── Kuyruğa ekle ─────────────────────────────────────────────
-function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider }) {
+const axios = require('axios');
+
+async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider }) {
   const job = {
     job_id:          jobId,
     status:          STATUS.PENDING,
@@ -44,8 +46,37 @@ function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyri
     error:           null,
   };
   jobs.set(jobId, job);
-  pending.push(jobId);
-  console.log(`📥 [Queue] Eklendi: ${jobId} | Kuyruk uzunluğu: ${pending.length}`);
+  
+  console.log(`📥 [Queue] Eklendi: ${jobId}`);
+
+  // Colab'a PUSH yap
+  const colabUrl = process.env.COLAB_URL; // ngrok URL'i buraya gelecek
+  if (colabUrl) {
+    try {
+      job.status = STATUS.PROCESSING;
+      jobs.set(jobId, job);
+      
+      console.log(`🚀 [Queue] Colab'a PUSH ediliyor: ${jobId} -> ${colabUrl}`);
+      
+      // Arka planda gönder, beklemeye gerek yok (fire and forget)
+      axios.post(`${colabUrl}/process`, {
+        job_id: jobId,
+        lyrics: job.processedLyrics,
+        genre: job.genre,
+        gender: job.gender,
+        duration: job.duration,
+        secret: process.env.COLAB_SECRET
+      }).catch(err => {
+        console.error(`❌ [Queue] Colab PUSH hatası (${jobId}): ${err.message}`);
+        fail(jobId, "Colab bağlantı hatası");
+      });
+    } catch (err) {
+      console.error(`❌ [Queue] PUSH hazırlık hatası: ${err.message}`);
+    }
+  } else {
+    console.warn(`⚠️ [Queue] COLAB_URL tanımlı değil, iş beklemede kalacak.`);
+  }
+
   return job;
 }
 
