@@ -29,29 +29,69 @@ const songsDir = process.env.LOCAL_STORAGE_PATH || '/tmp/voxerameta-songs';
 if (!fs.existsSync(songsDir)) fs.mkdirSync(songsDir, { recursive: true });
 
 // ── Middleware ────────────────────────────────────────────────
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
   origin: '*',
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token', 'X-App-Version', 'X-Colab-Secret'],
 }));
-app.use(rateLimit({
+
+// Rate limit: SADECE generate-song'da, poll endpoint'leri hariç
+app.use('/api/v1/generate-song', rateLimit({
   windowMs: 60 * 1000,
-  max: parseInt(process.env.MAX_REQUESTS_PER_MINUTE) || 20,
+  max: parseInt(process.env.MAX_REQUESTS_PER_MINUTE) || 30,
+  message: { error: 'Çok fazla istek. 1 dakika bekleyin.', retry_after: 60 },
+  standardHeaders: true,
+  legacyHeaders: false,
 }));
+
 app.use(morgan('combined'));
 app.use(express.json({ limit: '10mb' }));
+
+// ── BASE_URL otomatik tespiti (Render'da RENDER_EXTERNAL_URL set edilir) ──────
+if (!process.env.BASE_URL && process.env.RENDER_EXTERNAL_URL) {
+  process.env.BASE_URL = process.env.RENDER_EXTERNAL_URL;
+}
+if (!process.env.BASE_URL) {
+  process.env.BASE_URL = 'https://voxerameta-ai-backend.onrender.com';
+}
+
+// ── Render free tier uyku önleyici self-ping ──────────────────────────────────
+if (process.env.NODE_ENV === 'production') {
+  const https = require('https');
+  const http  = require('http');
+  setInterval(() => {
+    const url  = (process.env.BASE_URL || '').replace(/\/$/, '') + '/api/v1/health';
+    const mod  = url.startsWith('https') ? https : http;
+    mod.get(url, (r) => {
+      if (r.statusCode !== 200) console.log(`⏰ Self-ping: ${r.statusCode}`);
+    }).on('error', () => {});
+  }, 14 * 60 * 1000); // 14 dakikada bir — Render 15 dakikada uyutuyor
+  console.log('⏰ Self-ping aktif (14dk)');
+}
 
 app.use('/songs', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
   next();
 }, express.static(songsDir, {
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.wav')) res.setHeader('Content-Type', 'audio/wav');
-    if (filePath.endsWith('.mp3')) res.setHeader('Content-Type', 'audio/mpeg');
+    if (filePath.endsWith('.wav')) {
+      res.setHeader('Content-Type', 'audio/wav');
+    }
+    if (filePath.endsWith('.mp3')) {
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Accept-Ranges', 'bytes');
+    }
   },
 }));
+
+// /songs/:id.mp3 bulunamazsa 404 yerine açıklayıcı JSON ver
+app.use('/songs', (req, res) => {
+  res.status(404).json({ error: 'Ses dosyası bulunamadı', path: req.path,
+    hint: 'Render free tier /tmp klasörünü sıfırlar. Colab\'dan tekrar üretin.' });
+});
 
 app.use((req, res, next) => {
   if (!req.path.startsWith('/songs')) console.log(`📥 ${req.method} ${req.path}`);
