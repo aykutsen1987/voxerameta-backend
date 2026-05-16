@@ -51,8 +51,14 @@ router.post('/callback', upload.single('audio'), colabAuth, (req, res) => {
   }
 
   const filename = req.file.filename;
-  const baseUrl  = process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || '';
+  // BASE_URL yoksa host'tan otomatik türet — Render'da RENDER_EXTERNAL_URL set edilir
+  const baseUrl  = (
+    process.env.BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    `${req.protocol}://${req.get('host')}`
+  ).replace(/\/$/, '');
   const audioUrl = `${baseUrl}/songs/${filename}`;
+  console.log(`🔗 [Colab] audioUrl oluşturuldu: ${audioUrl}`);
 
   const ok = queue.complete(jobId, audioUrl);
   if (!ok) {
