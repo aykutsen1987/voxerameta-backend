@@ -21,7 +21,9 @@ router.post('/register', express.json(), (req, res) => {
     return res.status(401).json({ error: 'Geçersiz secret' });
   }
 
-  const newUrl = (req.body.colab_url || '').trim().replace(/\/$/, '');
+  const newUrl = (req.body.colab_url || '').trim()
+    .replace(/\/$/, '')
+    .replace(/\/process$/, '');  // Colab bazen /process ile birlikte gönderir — strip et
   if (!newUrl.startsWith('http')) {
     return res.status(400).json({ error: 'Geçersiz colab_url' });
   }
