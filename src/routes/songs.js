@@ -20,23 +20,26 @@ const queue = require('../services/jobQueue');
 router.post('/generate-song', async (req, res) => {
   const {
     lyrics,
-    genre    = 'POP',
-    duration = 30,
-    gender   = 'male',
-    language = 'tr',
-    theme    = 'Happy',
+    genre           = 'POP',
+    duration        = 30,
+    gender          = 'male',
+    language        = 'tr',
+    theme           = 'Happy',
+    sunoStylePrompt = null,
   } = req.body;
 
   if (!lyrics || lyrics.trim().length === 0) {
     return res.status(400).json({ error: 'Şarkı sözleri gerekli' });
   }
 
-  // Colab bağlı değilse hata ver (kuyruk dolmasın)
-  if (!process.env.COLAB_SECRET) {
-    return res.status(503).json({
-      error: 'Colab worker bağlı değil. COLAB_SECRET env değişkeni eksik.',
-      hint:  'Render Dashboard → Environment → COLAB_SECRET ekleyin.',
-    });
+  // Colab bağlı değilse uyar ama engelleme — kullanıcı bekleyebilir
+  const colabStatus = (() => {
+    try { const { getColabUrl } = require('../routes/colab_register'); return !!getColabUrl(); }
+    catch { return false; }
+  })();
+
+  if (!colabStatus) {
+    console.warn(`⚠️  [${uuidv4()}] Colab bağlı değil — istek kuyruğa alınıyor`);
   }
 
   const jobId      = uuidv4();
@@ -64,10 +67,11 @@ router.post('/generate-song', async (req, res) => {
     jobId,
     lyrics,
     processedLyrics,
-    genre:    safeGenre,
-    gender:   safeGender,
-    duration: safeDur,
+    genre:            safeGenre,
+    gender:           safeGender,
+    duration:         safeDur,
     lyricsProvider,
+    sunoStylePrompt:  sunoStylePrompt || null,
   });
 
   // Hemen job_id döndür — frontend poll edecek
@@ -95,11 +99,19 @@ router.get('/song-status', (req, res) => {
 
   // Tamamlandıysa ses URL'i ile döndür
   if (job.status === 'completed') {
+    // audioUrl her zaman tam URL olmalı (http/https ile başlamalı)
+    let audioUrl = job.audioUrl || '';
+    if (audioUrl && !audioUrl.startsWith('http')) {
+      const base = (process.env.BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+      audioUrl = `${base}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`;
+    }
     return res.json({
       id:             job.job_id,
       status:         'completed',
-      audioUrl:       job.audioUrl,
-      audioFile:      job.audioUrl,
+      audioUrl,
+      audioFile:      audioUrl,
+      url:            audioUrl,       // ← Android için ek alan
+      mp3:            audioUrl,       // ← bazı client versiyonları bunu kullanıyor
       title:          extractTitle(job.processedLyrics),
       genre:          job.genre,
       gender:         job.gender,
