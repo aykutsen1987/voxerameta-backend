@@ -1,4 +1,4 @@
-// routes/health.js — VoxeraMeta v3
+// routes/health.js — VoxeraMeta v4.1
 const express = require('express');
 const router  = express.Router();
 
@@ -8,16 +8,27 @@ router.get('/health', (req, res) => {
   const lyricsCount = Object.values(providers.lyrics).filter(p => p.isAvailable).length;
   const musicCount  = Object.values(providers.music).filter(p => p.isAvailable).length;
 
+  // FIX: Colab bağlantı durumunu colab_register modülünden al (COLAB_MUSIC_API_URL değil)
+  let colabConnected = false;
+  let colabUrl       = null;
+  try {
+    const { getColabUrl } = require('../routes/colab_register');
+    colabUrl       = getColabUrl();
+    colabConnected = !!colabUrl;
+  } catch {}
+
   res.json({
-    status:         (lyricsCount > 0 && musicCount > 0) ? 'healthy' : 'degraded',
-    version:        '3.0.0',
+    status:         (lyricsCount > 0) ? 'healthy' : 'degraded',
+    version:        '4.1.0',
     activeLyrics:   lyricsCount,
     activeMusic:    musicCount,
     uptime:         process.uptime() * 1000,
     providers,
     allFree:        true,
-    colabConnected: !!process.env.COLAB_MUSIC_API_URL,
-    message:        `Lyrics: ${lyricsCount}/3 aktif | Müzik: ${musicCount}/3 aktif`
+    colabConnected,
+    colabUrl:       colabUrl || null,
+    colabSecret:    !!process.env.COLAB_SECRET,
+    message:        `Lyrics: ${lyricsCount}/3 aktif | Colab: ${colabConnected ? '✅ Bağlı' : '❌ Bağlı Değil'}`,
   });
 });
 
@@ -39,7 +50,7 @@ router.get('/quota-info', (req, res) => {
     openrouter: { limit: '200/gün (:free modeller)',       resetTime: 'Günlük',                cost: '$0' },
     gemini:     { limit: '500/gün (gemini-2.5-flash)',     resetTime: 'Gece yarısı Pacific',   cost: '$0' },
     colab:      { limit: 'T4 GPU ~12saat/gün',            resetTime: 'Colab oturumu',          cost: '$0',
-                  note: 'Her Colab oturumunda ngrok URL değişir → Render\'a güncelleyin' }
+                  note: 'Colab her başladığında /api/colab/register ile URL otomatik güncellenir.' }
   });
 });
 

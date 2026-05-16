@@ -1,8 +1,10 @@
 // ============================================================
-// VoxeraMeta — İş Kuyruğu Servisi v4.1
+// VoxeraMeta — İş Kuyruğu Servisi v4.2
 //
-// v4.1: COLAB_URL artık process.env.COLAB_URL yerine
-//       /api/colab/register ile dinamik güncellenir.
+// v4.2 DÜZELTMELER:
+//   [FIX-1] Colab URL yokken job FAILED'a düşmüyor, PENDING kalıyor
+//           Colab bağlandıktan sonra bekleyen işleri otomatik push et
+//   [FIX-2] dequeue() hâlâ çalışıyor (Colab pull-mode için)
 // ============================================================
 'use strict';
 
@@ -14,17 +16,59 @@ const STATUS = {
 };
 
 const jobs    = new Map();
-const pending = [];
+const pending = [];   // pull-mode için (Colab poll ederse)
 const axios   = require('axios');
 
 // Dinamik Colab URL getter (colab_register modülünden)
 function _getColabUrl() {
   try {
-    // Runtime'da yüklü route'tan al (register ile güncellenen)
     const { getColabUrl } = require('../routes/colab_register');
     return getColabUrl() || process.env.COLAB_URL || null;
   } catch {
     return process.env.COLAB_URL || null;
+  }
+}
+
+async function _pushToColab(job) {
+  const colabUrl = _getColabUrl();
+  if (!colabUrl) return false;
+
+  const colabBase = colabUrl.replace(/\/$/, '').replace(/\/process$/, '');
+  const endpoint  = job.scenario === 2
+    ? `${colabBase}/process-s2`
+    : `${colabBase}/process`;
+
+  console.log(`🚀 [Queue] Colab'a PUSH (${job.scenario === 2 ? 'S2' : 'S1'}): ${job.job_id} → ${endpoint}`);
+
+  try {
+    job.status    = STATUS.PROCESSING;
+    job.updatedAt = Date.now();
+    jobs.set(job.job_id, job);
+
+    axios.post(endpoint, {
+      job_id:        job.job_id,
+      lyrics:        job.processedLyrics,
+      genre:         job.genre,
+      gender:        job.gender,
+      duration:      job.duration,
+      secret:        process.env.COLAB_SECRET,
+      custom_prompt: job.sunoStylePrompt || null,
+      scenario:      job.scenario || 1,
+    }, { timeout: 30000 }).catch(err => {
+      console.error(`❌ [Queue] Colab PUSH hatası (${job.job_id}): ${err.message}`);
+      // PUSH hatasında PENDING'e geri al — bir sonraki bağlantıda tekrar dene
+      const j = jobs.get(job.job_id);
+      if (j && j.status === STATUS.PROCESSING) {
+        j.status    = STATUS.PENDING;
+        j.updatedAt = Date.now();
+        pending.push(job.job_id);  // tekrar kuyruğa ekle
+        jobs.set(job.job_id, j);
+      }
+    });
+    return true;
+  } catch (err) {
+    console.error(`❌ [Queue] PUSH hazırlık hatası: ${err.message}`);
+    return false;
   }
 }
 
@@ -47,48 +91,40 @@ async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics
   jobs.set(jobId, job);
   console.log(`📥 [Queue] Eklendi: ${jobId}`);
 
-  const colabUrl = _getColabUrl();
+  const pushed = await _pushToColab(job);
 
-  if (colabUrl) {
-    try {
-      job.status = STATUS.PROCESSING;
-      jobs.set(jobId, job);
-
-      // colabUrl sonda /process içeriyorsa strip et
-      const colabBase = colabUrl.replace(/\/$/, '').replace(/\/process$/, '');
-
-      // Senaryo 2 ise /process-s2, normal ise /process endpoint'i kullan
-      const endpoint = job.scenario === 2
-        ? `${colabBase}/process-s2`
-        : `${colabBase}/process`;
-
-      console.log(`🚀 [Queue] Colab'a PUSH (${job.scenario === 2 ? 'S2: MusicGen+Vokal' : 'S1: RVC'}): ${jobId} → ${endpoint}`);
-
-      axios.post(endpoint, {
-        job_id:        jobId,
-        lyrics:        job.processedLyrics,
-        genre:         job.genre,
-        gender:        job.gender,
-        duration:      job.duration,
-        secret:        process.env.COLAB_SECRET,
-        custom_prompt: job.sunoStylePrompt || null,
-        scenario:      job.scenario || 1,
-      }, { timeout: 30000 }).catch(err => {
-        console.error(`❌ [Queue] Colab PUSH hatası (${jobId}): ${err.message}`);
-        fail(jobId, 'Colab bağlantı hatası: ' + err.message);
-      });
-    } catch (err) {
-      console.error(`❌ [Queue] PUSH hatası: ${err.message}`);
-    }
-  } else {
-    console.warn(`⚠️ [Queue] Colab URL bulunamadı!`);
-    console.warn(`   → Colab hücresini çalıştır, URL otomatik kaydedilir.`);
-    job.status = STATUS.FAILED;
-    job.error  = 'Colab bağlı değil. Colab notebook\'unu başlatın.';
-    jobs.set(jobId, job);
+  if (!pushed) {
+    // [FIX-1] Colab yoksa FAILED değil PENDING — pull-mode kuyruğuna ekle
+    console.warn(`⚠️ [Queue] Colab URL bulunamadı — ${jobId} PENDING kalıyor (Colab bağlantısı bekleniyor)`);
+    console.warn(`   → Colab hücresini çalıştır, URL /api/colab/register ile otomatik kaydedilir.`);
+    pending.push(jobId);
   }
 
   return job;
+}
+
+// Yeni Colab bağlandığında bekleyen işleri push et
+async function flushPending() {
+  if (pending.length === 0) return 0;
+  const colabUrl = _getColabUrl();
+  if (!colabUrl) return 0;
+
+  let pushed = 0;
+  const toProcess = [...pending];
+  pending.length = 0;  // önce boşalt
+
+  for (const jobId of toProcess) {
+    const job = jobs.get(jobId);
+    if (!job || job.status !== STATUS.PENDING) continue;
+    const ok = await _pushToColab(job);
+    if (ok) pushed++;
+    else pending.push(jobId);  // başarısız ise geri koy
+  }
+
+  if (pushed > 0) {
+    console.log(`🚀 [Queue] ${pushed} bekleyen iş Colab'a push edildi (flushPending)`);
+  }
+  return pushed;
 }
 
 function dequeue() {
@@ -99,7 +135,13 @@ function dequeue() {
     job.status    = STATUS.PROCESSING;
     job.updatedAt = Date.now();
     jobs.set(jobId, job);
-    return { job_id: job.job_id, lyrics: job.processedLyrics, genre: job.genre, gender: job.gender, duration: job.duration };
+    return {
+      job_id:   job.job_id,
+      lyrics:   job.processedLyrics,
+      genre:    job.genre,
+      gender:   job.gender,
+      duration: job.duration,
+    };
   }
   return null;
 }
@@ -132,14 +174,22 @@ function stats() {
   const all = [...jobs.values()];
   const byStatus = {};
   for (const s of Object.values(STATUS)) byStatus[s] = all.filter(j => j.status === s).length;
-  return { total: all.length, pendingQueue: pending.length, byStatus, colabUrl: _getColabUrl() || 'BAĞLI DEĞİL' };
+  return {
+    total:        all.length,
+    pendingQueue: pending.length,
+    byStatus,
+    colabUrl:     _getColabUrl() || 'BAĞLI DEĞİL',
+  };
 }
 
 function cleanup(maxAgeMs = 2 * 60 * 60 * 1000) {
   const cutoff = Date.now() - maxAgeMs;
-  let removed = 0;
+  let removed  = 0;
   for (const [id, job] of jobs.entries()) {
-    if (job.updatedAt < cutoff && job.status !== STATUS.PROCESSING) { jobs.delete(id); removed++; }
+    if (job.updatedAt < cutoff && job.status !== STATUS.PROCESSING) {
+      jobs.delete(id);
+      removed++;
+    }
   }
   if (removed > 0) console.log(`🧹 [Queue] ${removed} eski iş temizlendi`);
   return removed;
@@ -147,4 +197,4 @@ function cleanup(maxAgeMs = 2 * 60 * 60 * 1000) {
 
 setInterval(() => cleanup(), 30 * 60 * 1000);
 
-module.exports = { STATUS, enqueue, dequeue, complete, fail, get, stats };
+module.exports = { STATUS, enqueue, dequeue, complete, fail, get, stats, flushPending };
