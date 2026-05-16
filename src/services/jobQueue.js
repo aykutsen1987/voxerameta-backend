@@ -28,7 +28,7 @@ function _getColabUrl() {
   }
 }
 
-async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider }) {
+async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider, sunoStylePrompt }) {
   const job = {
     job_id:          jobId,
     status:          STATUS.PENDING,
@@ -38,6 +38,7 @@ async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics
     gender,
     duration,
     lyricsProvider,
+    sunoStylePrompt: sunoStylePrompt || null,
     createdAt:       Date.now(),
     updatedAt:       Date.now(),
     audioUrl:        null,
@@ -54,13 +55,17 @@ async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics
       jobs.set(jobId, job);
       console.log(`🚀 [Queue] Colab'a PUSH: ${jobId} → ${colabUrl}/process`);
 
-      axios.post(`${colabUrl.replace(/\/$/, '')}/process`, {
-        job_id:   jobId,
-        lyrics:   job.processedLyrics,
-        genre:    job.genre,
-        gender:   job.gender,
-        duration: job.duration,
-        secret:   process.env.COLAB_SECRET,
+      // colabUrl sonda /process içeriyorsa strip et — register'dan /process ile gelebilir
+      const colabBase = colabUrl.replace(/\/$/, '').replace(/\/process$/, '');
+
+      axios.post(`${colabBase}/process`, {
+        job_id:        jobId,
+        lyrics:        job.processedLyrics,
+        genre:         job.genre,
+        gender:        job.gender,
+        duration:      job.duration,
+        secret:        process.env.COLAB_SECRET,
+        custom_prompt: job.sunoStylePrompt || null,
       }, { timeout: 30000 }).catch(err => {
         console.error(`❌ [Queue] Colab PUSH hatası (${jobId}): ${err.message}`);
         fail(jobId, 'Colab bağlantı hatası: ' + err.message);
