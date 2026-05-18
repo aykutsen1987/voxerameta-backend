@@ -12,9 +12,57 @@
 const express = require('express');
 const router  = express.Router();
 const { v4: uuidv4 } = require('uuid');
+const multer  = require('multer');
+const path    = require('path');
+const fs      = require('fs');
 
 const { processLyrics, buildMusicStylePrompt } = require('../services/freeAiService');
 const queue = require('../services/jobQueue');
+
+// ── Referans dosya upload dizini ──────────────────────────────
+const REF_DIR = process.env.REF_STORAGE_PATH || '/tmp/voxerameta-refs';
+if (!fs.existsSync(REF_DIR)) fs.mkdirSync(REF_DIR, { recursive: true });
+
+const refUpload = multer({
+  storage: multer.diskStorage({
+    destination: REF_DIR,
+    filename: (req, file, cb) => {
+      const uid  = uuidv4();
+      const ext  = path.extname(file.originalname) || '.mp3';
+      cb(null, `${uid}${ext}`);
+    },
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  fileFilter: (req, file, cb) => {
+    const allowed = /\.(mp3|wav|m4a|aac|flac|ogg)$/i;
+    if (allowed.test(file.originalname)) cb(null, true);
+    else cb(new Error('Sadece ses dosyaları kabul edilir (mp3/wav/m4a/aac/flac/ogg)'));
+  },
+});
+
+// ── POST /api/v1/upload-ref ───────────────────────────────────
+// Ses veya melodi referans dosyasını yükler, sunucu path'ini döner.
+// type=voice → voice_ref_path olarak kullanılır
+// type=melody → melody_ref_path olarak kullanılır
+router.post('/upload-ref', refUpload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'Dosya yüklenmedi (field adı: file)' });
+  }
+  const refType = (req.body.type || 'melody').toLowerCase(); // 'voice' | 'melody'
+  const refPath = req.file.path; // sunucuda mutlak yol — Colab'a bu gönderilir
+  const size    = req.file.size;
+
+  console.log(`📎 [upload-ref] ${refType} → ${refPath} (${Math.round(size / 1024)} KB)`);
+
+  res.json({
+    ok:      true,
+    refType,
+    refPath,                          // Colab push'unda kullanılacak
+    filename: req.file.filename,
+    sizeKB:  Math.round(size / 1024),
+    message: `${refType === 'voice' ? 'Ses' : 'Melodi'} referansı yüklendi`,
+  });
+});
 
 // ── POST /api/v1/generate-song ────────────────────────────────
 router.post('/generate-song', async (req, res) => {
@@ -26,6 +74,8 @@ router.post('/generate-song', async (req, res) => {
     language        = 'tr',
     theme           = 'Happy',
     sunoStylePrompt = null,
+    voice_ref_path  = null,   // v5: kullanıcı ses referansı (RVC clone için)
+    melody_ref_path = null,   // v5: melodi referansı (MusicGen conditioning için)
   } = req.body;
 
   if (!lyrics || lyrics.trim().length === 0) {
@@ -49,7 +99,7 @@ router.post('/generate-song', async (req, res) => {
   const safeGenre  = genre.toUpperCase();
   const safeDur    = Math.max(5, Math.min(Number(duration), 60));
 
-  console.log(`🎵 [${jobId}] Kuyruğa alınıyor — ${safeGenre}/${safeGender}/${safeDur}s`);
+  console.log(`🎵 [${jobId}] Kuyruğa alınıyor — ${safeGenre}/${safeGender}/${safeDur}s${melody_ref_path ? ' 🎼melodi' : ''}${voice_ref_path ? ' 🎤ses' : ''}`);
 
   let processedLyrics = lyrics;
   let lyricsProvider  = 'passthrough';
@@ -71,6 +121,8 @@ router.post('/generate-song', async (req, res) => {
     duration:         safeDur,
     lyricsProvider,
     sunoStylePrompt:  sunoStylePrompt || null,
+    voiceRefPath:     voice_ref_path  || null,   // v5: ses klonu referansı
+    melodyRefPath:    melody_ref_path || null,   // v5: melodi conditioning
   });
 
   res.status(202).json({
