@@ -20,7 +20,9 @@ const { processLyrics, buildMusicStylePrompt } = require('../services/freeAiServ
 const queue = require('../services/jobQueue');
 
 // ── Referans dosya upload dizini ──────────────────────────────
-const REF_DIR = process.env.REF_STORAGE_PATH || '/tmp/voxerameta-refs';
+// Referans dosyalar: /songs/ altında serve ediliyor → Colab URL ile indirebilir
+const SONGS_BASE = process.env.LOCAL_STORAGE_PATH || '/tmp/voxerameta-songs';
+const REF_DIR = path.join(SONGS_BASE, 'refs');
 if (!fs.existsSync(REF_DIR)) fs.mkdirSync(REF_DIR, { recursive: true });
 
 const refUpload = multer({
@@ -49,15 +51,23 @@ router.post('/upload-ref', refUpload.single('file'), (req, res) => {
     return res.status(400).json({ error: 'Dosya yüklenmedi (field adı: file)' });
   }
   const refType = (req.body.type || 'melody').toLowerCase(); // 'voice' | 'melody'
-  const refPath = req.file.path; // sunucuda mutlak yol — Colab'a bu gönderilir
+  const refPath = req.file.path; // sunucuda mutlak yol
   const size    = req.file.size;
 
-  console.log(`📎 [upload-ref] ${refType} → ${refPath} (${Math.round(size / 1024)} KB)`);
+  // Colab'ın erişebileceği public URL oluştur (/songs/refs/ statik serve ediliyor)
+  const baseUrl = (
+    process.env.BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    'https://voxerameta-ai-backend.onrender.com'
+  ).replace(/\/$/, '');
+  const refUrl = `${baseUrl}/songs/refs/${req.file.filename}`;
+
+  console.log(`📎 [upload-ref] ${refType} → ${refUrl} (${Math.round(size / 1024)} KB)`);
 
   res.json({
     ok:      true,
     refType,
-    refPath,                          // Colab push'unda kullanılacak
+    refPath: refUrl,                  // Colab bu URL'i indirecek
     filename: req.file.filename,
     sizeKB:  Math.round(size / 1024),
     message: `${refType === 'voice' ? 'Ses' : 'Melodi'} referansı yüklendi`,
