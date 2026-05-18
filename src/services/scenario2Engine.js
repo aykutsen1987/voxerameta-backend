@@ -95,7 +95,7 @@ async function generateInstrumental(prompt, durationSeconds) {
       errors.push(err.message);
     }
   }
-  console.warn('⚠️  [Scenario2] Tüm altyapı provider'lar başarısız — sine wave');
+  console.warn(`⚠️  [Scenario2] Tüm altyapı provider'lar başarısız — sine wave`);
   return _instrumentalFallback(durationSeconds);
 }
 
