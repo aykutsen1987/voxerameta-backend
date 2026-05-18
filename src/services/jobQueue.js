@@ -53,7 +53,8 @@ async function _pushToColab(job) {
       duration:         job.duration,
       secret:           process.env.COLAB_SECRET,
       custom_prompt:    job.sunoStylePrompt || null,
-      melody_ref_path:  job.melodyRefPath  || null,  // v6: hibrit melody conditioning
+      melody_ref_path:  job.melodyRefPath   || null,  // v5: melodi conditioning
+      voice_ref_path:   job.voiceRefPath    || null,  // v5: ses klonu referansı
       scenario:         job.scenario || 1,
     }, { timeout: 30000 }).catch(err => {
       console.error(`❌ [Queue] Colab PUSH hatası (${job.job_id}): ${err.message}`);
@@ -73,7 +74,7 @@ async function _pushToColab(job) {
   }
 }
 
-async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider, sunoStylePrompt }) {
+async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider, sunoStylePrompt, voiceRefPath, melodyRefPath }) {
   const job = {
     job_id:          jobId,
     status:          STATUS.PENDING,
@@ -84,6 +85,8 @@ async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics
     duration,
     lyricsProvider,
     sunoStylePrompt: sunoStylePrompt || null,
+    voiceRefPath:    voiceRefPath    || null,   // v5: ses klonu referansı
+    melodyRefPath:   melodyRefPath   || null,   // v5: melodi conditioning
     createdAt:       Date.now(),
     updatedAt:       Date.now(),
     audioUrl:        null,
