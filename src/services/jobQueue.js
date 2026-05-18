@@ -46,14 +46,15 @@ async function _pushToColab(job) {
     jobs.set(job.job_id, job);
 
     axios.post(endpoint, {
-      job_id:        job.job_id,
-      lyrics:        job.processedLyrics,
-      genre:         job.genre,
-      gender:        job.gender,
-      duration:      job.duration,
-      secret:        process.env.COLAB_SECRET,
-      custom_prompt: job.sunoStylePrompt || null,
-      scenario:      job.scenario || 1,
+      job_id:           job.job_id,
+      lyrics:           job.processedLyrics,
+      genre:            job.genre,
+      gender:           job.gender,
+      duration:         job.duration,
+      secret:           process.env.COLAB_SECRET,
+      custom_prompt:    job.sunoStylePrompt || null,
+      melody_ref_path:  job.melodyRefPath  || null,  // v6: hibrit melody conditioning
+      scenario:         job.scenario || 1,
     }, { timeout: 30000 }).catch(err => {
       console.error(`❌ [Queue] Colab PUSH hatası (${job.job_id}): ${err.message}`);
       // PUSH hatasında PENDING'e geri al — bir sonraki bağlantıda tekrar dene
