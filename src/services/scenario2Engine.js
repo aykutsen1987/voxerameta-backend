@@ -267,31 +267,35 @@ async function mixTracks(instrumentalPath, vocalPath, outputPath, duration) {
   console.log(`🎚️  [Scenario2→Mix v3] ${path.basename(instrumentalPath)} + ${path.basename(vocalPath)}`);
 
   // [PRO-3] Vocal chain: highpass + EQ presence + de-ess + compressor
+  // v3.1: stereo zorlama + bass dominant düzeltme + vocal güçlendirme
   const vocalChain =
-    'highpass=f=80,' +
-    'equalizer=f=250:width_type=o:width=2:g=-2,' +   // mud kes
-    'equalizer=f=3000:width_type=o:width=1:g=2.5,' + // presence boost
-    'equalizer=f=7500:width_type=o:width=0.5:g=-3,' + // de-ess
-    'acompressor=threshold=-20dB:ratio=4:attack=5:release=80:makeup=2';
+    'aformat=channel_layouts=stereo,' +
+    'highpass=f=100,' +
+    'equalizer=f=300:width_type=o:width=2:g=-3,' +
+    'equalizer=f=1500:width_type=o:width=1:g=1.5,' +
+    'equalizer=f=3000:width_type=o:width=1:g=4,' +
+    'equalizer=f=5000:width_type=o:width=1:g=2,' +
+    'equalizer=f=8000:width_type=o:width=0.5:g=-4,' +
+    'acompressor=threshold=-18dB:ratio=3:attack=8:release=100:makeup=3';
 
-  // [PRO-1][PRO-2] Music chain: vol=0.45, bass +3dB, 2kHz notch -6dB
   const musicChain =
-    'volume=0.45,' +
-    'equalizer=f=100:width_type=o:width=2:g=3,' +    // bass boost
-    'equalizer=f=2000:width_type=o:width=1:g=-6,' +  // vokal boşluğu
-    'equalizer=f=12000:width_type=o:width=2:g=1.5';  // air
+    'aformat=channel_layouts=stereo,' +
+    'highpass=f=120,' +
+    'equalizer=f=200:width_type=s:width=200:g=-8,' +  // bass dominant kes
+    'equalizer=f=2000:width_type=o:width=1:g=-8,' +   // vokal alanı genişlet
+    'equalizer=f=10000:width_type=o:width=2:g=2,' +
+    'volume=0.38';
 
-  // [PRO-4][PRO-5] Master: compressor + EQ + loudnorm, +3s için duration=longest
   const filterComplex =
     `[0:a]${vocalChain}[voc];` +
     `[1:a]${musicChain}[bg];` +
-    '[voc]volume=0.85[voc_vol];' +
-    // [PRO-6] duration=longest (vokal bittikten sonra müzik devam eder)
+    '[voc]volume=1.0[voc_vol];' +
     '[voc_vol][bg]amix=inputs=2:duration=longest:dropout_transition=3[mixed];' +
     '[mixed]' +
-      'acompressor=threshold=-18dB:ratio=4:attack=5:release=100:makeup=1.8,' +
-      'equalizer=f=80:width_type=o:width=2:g=2,' +
-      'equalizer=f=10000:width_type=o:width=2:g=1,' +
+      'acompressor=threshold=-16dB:ratio=3:attack=5:release=80:makeup=2,' +
+      'equalizer=f=60:width_type=o:width=2:g=2,' +
+      'equalizer=f=3000:width_type=o:width=1:g=1,' +
+      'equalizer=f=10000:width_type=o:width=2:g=1.5,' +
       'loudnorm=I=-14:TP=-1.5:LRA=9' +
     '[out]';
 
