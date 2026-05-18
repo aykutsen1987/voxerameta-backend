@@ -106,9 +106,10 @@ app.use('/api/colab', colabRegisterRouter);  // YENİ: register + status
 
 app.get('/', (req, res) => res.json({
   name:    'VoxeraMeta API',
-  version: '4.1.0',
+  version: '5.0.0',
   endpoints: {
     health:         'GET  /api/v1/health',
+    uploadRef:      'POST /api/v1/upload-ref  (ses/melodi referansı yükle)',
     generate:       'POST /api/v1/generate-song',
     status:         'GET  /api/v1/song-status?id=JOB_ID',
     colabRegister:  'POST /api/colab/register  (Colab → URL bildir)',
