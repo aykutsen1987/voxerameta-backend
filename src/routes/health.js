@@ -46,7 +46,7 @@ router.get('/provider-status', (req, res) => {
 
 router.get('/quota-info', (req, res) => {
   res.json({
-    groq:       { limit: '1.000/gün (llama-3.3-70b)',     resetTime: 'Günlük gece yarısı UTC', cost: '$0' },
+    groq:       { limit: '1.000/gün (gpt-oss-120b, yedek: qwen3.6-27b)', resetTime: 'Günlük gece yarısı UTC', cost: '$0' },
     openrouter: { limit: '200/gün (:free modeller)',       resetTime: 'Günlük',                cost: '$0' },
     gemini:     { limit: '500/gün (gemini-2.5-flash)',     resetTime: 'Gece yarısı Pacific',   cost: '$0' },
     colab:      { limit: 'T4 GPU ~12saat/gün',            resetTime: 'Colab oturumu',          cost: '$0',

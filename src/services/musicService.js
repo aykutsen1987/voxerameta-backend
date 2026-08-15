@@ -57,7 +57,7 @@ function getProviderStatus() {
   return {
     lyrics: {
       groq: {
-        name:        'Groq — llama-3.3-70b',
+        name:        'Groq — gpt-oss-120b (yedek: qwen3.6-27b)',
         isAvailable: !!process.env.GROQ_API_KEY,
         cost:        'Ücretsiz',
       },

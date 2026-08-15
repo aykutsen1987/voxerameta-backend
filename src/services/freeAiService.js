@@ -36,30 +36,43 @@ ${lyrics}`;
 }
 
 // ── 1. GROQ (Ücretsiz — 1.000/gün) ───────────────────────────
+// NOT: llama-3.3-70b-versatile Groq tarafindan kaldirildi (16.08.2026).
+// Birincil: openai/gpt-oss-120b, yedek: qwen/qwen3.6-27b.
+const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.6-27b'];
+
 async function processWithGroq(lyrics, genre) {
   if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY eksik');
 
-  const res = await axios.post(
-    'https://api.groq.com/openai/v1/chat/completions',
-    {
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: buildLyricsPrompt(lyrics, genre) }],
-      max_tokens: 1500,
-      temperature: 0.8
-    },
-    {
-      headers: {
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      timeout: 20000
-    }
-  );
+  let lastError = null;
+  for (const model of GROQ_MODELS) {
+    try {
+      const res = await axios.post(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+          model,
+          messages: [{ role: 'user', content: buildLyricsPrompt(lyrics, genre) }],
+          max_tokens: 1500,
+          temperature: 0.8
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 20000
+        }
+      );
 
-  const text = res.data?.choices?.[0]?.message?.content;
-  if (!text) throw new Error('Groq boş yanıt döndürdü');
-  console.log('✅ Groq lyrics işlemi başarılı');
-  return { text, provider: 'groq_llama33_70b', model: 'llama-3.3-70b-versatile' };
+      const text = res.data?.choices?.[0]?.message?.content;
+      if (!text) throw new Error('Groq boş yanıt döndürdü');
+      console.log(`✅ Groq (${model}) lyrics işlemi başarılı`);
+      return { text, provider: `groq_${model.replace(/[^a-z0-9]/gi, '_')}`, model };
+    } catch (err) {
+      console.warn(`⚠️  Groq ${model} başarısız: ${err.message}`);
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('Groq tüm modeller başarısız');
 }
 
 // ── 2. OPENROUTER :free Modeller (200/gün) ────────────────────
