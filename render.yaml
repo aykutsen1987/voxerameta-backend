@@ -3,33 +3,28 @@ services:
     name: voxerameta-backend
     env: node
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm install --omit=dev
     startCommand: node src/server.js
     plan: free
+    healthCheckPath: /api/v1/health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 3000
-      - key: GROQ_API_KEY
-        sync: false
-      - key: OPENROUTER_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
       - key: COLAB_SECRET
-        sync: false          # ← Colab notebook'taki COLAB_SECRET ile AYNI olmalı
-      - key: COLAB_URL
-        sync: false          # ← Colab çalıştıktan sonra buraya ngrok URL/process yaz
+        sync: false          # ZORUNLU — Colab notebook'taki COLAB_SECRET ile AYNI (en az 16 karakter)
       - key: BASE_URL
-        value: https://voxerameta-ai-backend.onrender.com
-      - key: LOCAL_MUSIC_API_URL
-        sync: false
-      - key: REPLICATE_API_TOKEN
-        sync: false
-      - key: API_AUTH_TOKEN
-        sync: false
+        value: https://voxerameta-ai-backend.onrender.com   # kendi Render adresinizle değiştirin
+      - key: LYRICS_MODE
+        value: preserve      # preserve = sözleriniz aynen kalır (önerilen, ücretsiz). rewrite = LLM uyarlar (Groq/OpenRouter/Gemini anahtarı gerekir)
       - key: LOCAL_STORAGE_PATH
         value: /tmp/voxerameta-songs
       - key: MAX_REQUESTS_PER_MINUTE
         value: 20
+      - key: API_AUTH_TOKEN
+        sync: false          # İSTEĞE BAĞLI — boş bırakın
+      - key: GROQ_API_KEY
+        sync: false          # yalnızca LYRICS_MODE=rewrite için
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false

@@ -16,8 +16,29 @@ const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
 
-const { processLyrics, buildMusicStylePrompt } = require('../services/freeAiService');
+const { prepareLyrics } = require('../services/freeAiService');
 const queue = require('../services/jobQueue');
+const { isColabAlive } = require('./colab_register');
+
+const MAX_LYRICS_CHARS  = 4000;
+const MAX_SONG_SECONDS  = parseInt(process.env.MAX_SONG_SECONDS, 10) || 180;
+
+function _baseUrl() {
+  return (
+    process.env.BASE_URL ||
+    process.env.RENDER_EXTERNAL_URL ||
+    'https://voxerameta-ai-backend.onrender.com'
+  ).replace(/\/$/, '');
+}
+
+/** Referans dosya adresi yalnızca bu sunucunun /songs/refs/<uuid>.<uzantı> yolu olabilir (SSRF koruması) */
+function isOwnRefUrl(url) {
+  if (url === null || url === undefined || url === '') return true;
+  if (typeof url !== 'string') return false;
+  const prefix = `${_baseUrl()}/songs/refs/`;
+  if (!url.startsWith(prefix)) return false;
+  return /^[0-9a-f-]{36}\.[a-z0-9]{2,5}$/i.test(url.slice(prefix.length));
+}
 
 // ── Referans dosya upload dizini ──────────────────────────────
 // Referans dosyalar: /songs/ altında serve ediliyor → Colab URL ile indirebilir
@@ -50,7 +71,7 @@ router.post('/upload-ref', refUpload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'Dosya yüklenmedi (field adı: file)' });
   }
-  const refType = (req.body.type || 'melody').toLowerCase(); // 'voice' | 'melody'
+  const refType = String((req.body && req.body.type) || 'melody').toLowerCase() === 'voice' ? 'voice' : 'melody';
   const refPath = req.file.path; // sunucuda mutlak yol
   const size    = req.file.size;
 
@@ -88,38 +109,40 @@ router.post('/generate-song', async (req, res) => {
     melody_ref_path = null,   // v5: melodi referansı (MusicGen conditioning için)
   } = req.body;
 
-  if (!lyrics || lyrics.trim().length === 0) {
+  if (!lyrics || typeof lyrics !== 'string' || lyrics.trim().length === 0) {
     return res.status(400).json({ error: 'Şarkı sözleri gerekli' });
   }
+  if (lyrics.length > MAX_LYRICS_CHARS) {
+    return res.status(400).json({ error: `Sözler en fazla ${MAX_LYRICS_CHARS} karakter olabilir` });
+  }
+  if (!isOwnRefUrl(voice_ref_path) || !isOwnRefUrl(melody_ref_path)) {
+    return res.status(400).json({ error: 'Geçersiz referans dosya adresi' });
+  }
 
-  // [FIX-2] Colab bağlantı durumunu doğru modülden al
-  let colabStatus = false;
-  try {
-    const { getColabUrl } = require('../routes/colab_register');
-    colabStatus = !!getColabUrl();
-  } catch {}
-
-  if (!colabStatus) {
+  const colabAlive = isColabAlive();
+  if (!colabAlive) {
     console.warn(`⚠️  Colab bağlı değil — istek kuyruğa alınıyor (Colab bağlanınca otomatik işlenecek)`);
   }
 
   const jobId      = uuidv4();
-  const safeGender = ['male', 'female'].includes((gender || '').toLowerCase())
-    ? gender.toLowerCase() : 'male';
-  const safeGenre  = genre.toUpperCase();
-  const safeDur    = Math.max(5, Math.min(Number(duration), 60));
+  const safeGender = ['male', 'female'].includes(String(gender || '').toLowerCase())
+    ? String(gender).toLowerCase() : 'male';
+  const safeGenre  = String(genre || 'POP').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 20) || 'POP';
+  const safeDur    = Math.max(10, Math.min(Number(duration) || 60, MAX_SONG_SECONDS));
+  const safeLang   = ['tr', 'en'].includes(String(language || '').toLowerCase())
+    ? String(language).toLowerCase() : 'tr';
 
-  console.log(`🎵 [${jobId}] Kuyruğa alınıyor — ${safeGenre}/${safeGender}/${safeDur}s${melody_ref_path ? ' 🎼melodi' : ''}${voice_ref_path ? ' 🎤ses' : ''}`);
+  console.log(`🎵 [${jobId}] Kuyruğa alınıyor — ${safeGenre}/${safeGender}/${safeDur}s/${safeLang}${melody_ref_path ? ' 🎼melodi' : ''}${voice_ref_path ? ' 🎤ses' : ''}`);
 
   let processedLyrics = lyrics;
   let lyricsProvider  = 'passthrough';
   try {
-    const result   = await processLyrics(lyrics, safeGenre);
+    const result    = await prepareLyrics(lyrics, safeGenre);
     processedLyrics = result.text;
     lyricsProvider  = result.provider;
-    console.log(`✅ [${jobId}] Lyrics hazır — ${lyricsProvider}`);
+    console.log(`✅ [${jobId}] Sözler hazır — ${lyricsProvider}`);
   } catch (err) {
-    console.warn(`⚠️  [${jobId}] Lyrics işleme başarısız, orijinal kullanılıyor: ${err.message}`);
+    console.warn(`⚠️  [${jobId}] Söz hazırlama başarısız, orijinal kullanılıyor: ${err.message}`);
   }
 
   queue.enqueue({
@@ -129,20 +152,24 @@ router.post('/generate-song', async (req, res) => {
     genre:            safeGenre,
     gender:           safeGender,
     duration:         safeDur,
+    language:         safeLang,
     lyricsProvider,
     sunoStylePrompt:  sunoStylePrompt || null,
-    voiceRefPath:     voice_ref_path  || null,   // v5: ses klonu referansı
-    melodyRefPath:    melody_ref_path || null,   // v5: melodi conditioning
-  });
+    voiceRefPath:     voice_ref_path  || null,
+    melodyRefPath:    melody_ref_path || null,
+  }).catch(err => console.error(`❌ [${jobId}] enqueue hatası: ${err.message}`));
 
   res.status(202).json({
-    id:       jobId,
-    status:   'pending',
-    message:  '✅ Kuyruğa alındı. Durum için /song-status?id=' + jobId,
-    pollUrl:  `/api/v1/song-status?id=${jobId}`,
-    genre:    safeGenre,
-    gender:   safeGender,
-    duration: safeDur,
+    id:             jobId,
+    status:         'pending',
+    message:        colabAlive
+      ? '✅ Kuyruğa alındı.'
+      : '⏳ Kuyruğa alındı, Colab şu an bağlı değil — bağlanınca otomatik başlayacak.',
+    pollUrl:        `/api/v1/song-status?id=${jobId}`,
+    genre:          safeGenre,
+    gender:         safeGender,
+    duration:       safeDur,
+    colabConnected: colabAlive,
   });
 });
 

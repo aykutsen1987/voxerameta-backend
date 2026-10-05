@@ -13,6 +13,7 @@ const helmet    = require('helmet');
 const morgan    = require('morgan');
 const rateLimit = require('express-rate-limit');
 const fs        = require('fs');
+const path      = require('path');
 
 const songRoutes   = require('./routes/songs');
 const healthRoutes = require('./routes/health');
@@ -36,17 +37,20 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Auth-Token', 'X-App-Version', 'X-Colab-Secret'],
 }));
 
-// Rate limit: SADECE generate-song'da, poll endpoint'leri hariç
-app.use('/api/v1/generate-song', rateLimit({
+// Rate limit: şarkı üretimi ve dosya yükleme (poll endpoint'leri hariç)
+const _limiter = (max) => rateLimit({
   windowMs: 60 * 1000,
-  max: parseInt(process.env.MAX_REQUESTS_PER_MINUTE) || 30,
+  max,
   message: { error: 'Çok fazla istek. 1 dakika bekleyin.', retry_after: 60 },
   standardHeaders: true,
   legacyHeaders: false,
-}));
+});
+app.use('/api/v1/generate-song',    _limiter(parseInt(process.env.MAX_REQUESTS_PER_MINUTE) || 30));
+app.use('/api/v1/generate-song-s2', _limiter(parseInt(process.env.MAX_REQUESTS_PER_MINUTE) || 30));
+app.use('/api/v1/upload-ref',       _limiter(10));
 
 app.use(morgan('combined'));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' }));
 
 // ── BASE_URL otomatik tespiti (Render'da RENDER_EXTERNAL_URL set edilir) ──────
 if (!process.env.BASE_URL && process.env.RENDER_EXTERNAL_URL) {
@@ -90,8 +94,25 @@ app.use('/songs', (req, res, next) => {
 // /songs/:id.mp3 bulunamazsa 404 yerine açıklayıcı JSON ver
 app.use('/songs', (req, res) => {
   res.status(404).json({ error: 'Ses dosyası bulunamadı', path: req.path,
-    hint: 'Render free tier /tmp klasörünü sıfırlar. Colab\'dan tekrar üretin.' });
+    hint: 'Render free tier /tmp klasörünü sıfırlar. Şarkıyı tekrar üretin (veya telefona indirin).' });
 });
+
+// ── Disk temizliği: eski şarkı/referans dosyalarını sil (Render /tmp dolmasın) ──
+function cleanOldFiles(dir, maxAgeMs) {
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  const cutoff = Date.now() - maxAgeMs;
+  for (const e of entries) {
+    if (!e.isFile()) continue;
+    const p = path.join(dir, e.name);
+    try { if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p); } catch {}
+  }
+}
+const _cleaner = setInterval(() => {
+  cleanOldFiles(songsDir, 24 * 60 * 60 * 1000);                 // şarkılar: 24 saat
+  cleanOldFiles(path.join(songsDir, 'refs'), 6 * 60 * 60 * 1000); // referanslar: 6 saat
+}, 60 * 60 * 1000);
+if (_cleaner.unref) _cleaner.unref();
 
 app.use((req, res, next) => {
   if (!req.path.startsWith('/songs')) console.log(`📥 ${req.method} ${req.path}`);
@@ -106,7 +127,7 @@ app.use('/api/colab', colabRegisterRouter);  // YENİ: register + status
 
 app.get('/', (req, res) => res.json({
   name:    'VoxeraMeta API',
-  version: '5.0.0',
+  version: '5.1.0',
   endpoints: {
     health:         'GET  /api/v1/health',
     uploadRef:      'POST /api/v1/upload-ref  (ses/melodi referansı yükle)',
@@ -122,16 +143,18 @@ app.get('/', (req, res) => res.json({
 app.use(errorHandler);
 
 app.listen(PORT, () => {
-  console.log(`\n🎵 VoxeraMeta v4.1 — Render Backend`);
+  console.log(`\n🎵 VoxeraMeta v5.1 — Render Backend`);
   console.log(`📡 http://localhost:${PORT}\n`);
-  console.log(`📝 Lyrics Zinciri:`);
-  console.log(`  ${process.env.GROQ_API_KEY       ? '✅' : '❌'} Groq`);
-  console.log(`  ${process.env.OPENROUTER_API_KEY  ? '✅' : '❌'} OpenRouter`);
-  console.log(`  ${process.env.GEMINI_API_KEY       ? '✅' : '❌'} Gemini`);
+  console.log(`📝 Söz modu: ${(process.env.LYRICS_MODE || 'preserve').toLowerCase()} (preserve = sözler aynen korunur, LLM gerekmez)`);
+  if ((process.env.LYRICS_MODE || '').toLowerCase() === 'rewrite') {
+    console.log(`  ${process.env.GROQ_API_KEY       ? '✅' : '❌'} Groq`);
+    console.log(`  ${process.env.OPENROUTER_API_KEY  ? '✅' : '❌'} OpenRouter`);
+    console.log(`  ${process.env.GEMINI_API_KEY       ? '✅' : '❌'} Gemini`);
+  }
   console.log(`\n🎵 Colab Worker:`);
   console.log(`  ${process.env.COLAB_SECRET ? '✅' : '❌'} COLAB_SECRET`);
   console.log(`  ${process.env.BASE_URL     ? '✅' : '❌'} BASE_URL → ${process.env.BASE_URL || 'YOK!'}`);
-  console.log(`  ℹ️  COLAB_URL → Colab /api/colab/register ile otomatik güncellenir`);
+  console.log(`  ℹ️  Colab adresi /api/colab/register ile otomatik güncellenir (heartbeat ~2 dk)`);
 });
 
 module.exports = app;

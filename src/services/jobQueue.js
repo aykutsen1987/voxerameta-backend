@@ -1,12 +1,19 @@
 // ============================================================
-// VoxeraMeta — İş Kuyruğu Servisi v4.2
+// VoxeraMeta — İş Kuyruğu Servisi v5.1
 //
-// v4.2 DÜZELTMELER:
-//   [FIX-1] Colab URL yokken job FAILED'a düşmüyor, PENDING kalıyor
-//           Colab bağlandıktan sonra bekleyen işleri otomatik push et
-//   [FIX-2] dequeue() hâlâ çalışıyor (Colab pull-mode için)
+// Akış: Android → enqueue() → Colab'a PUSH (/process) → Colab callback → complete()
+//
+// v5.1:
+//   - Colab'a ulaşılamazsa iş PENDING kalır, Colab bağlanınca otomatik gönderilir
+//   - En fazla JOB_MAX_ATTEMPTS deneme; sonra iş net bir hata mesajıyla FAILED olur
+//   - Takılı işler (Colab oturumu kapandı) zaman aşımıyla FAILED olur — sonsuza
+//     kadar "processing" kalmaz
+//   - Yeni Colab oturumu bağlanınca eski oturumda kalan işler yeniden kuyruğa alınır
+//   - Secret artık gövdede değil X-Colab-Secret başlığında gider
 // ============================================================
 'use strict';
+
+const axios = require('axios');
 
 const STATUS = {
   PENDING:    'pending',
@@ -15,66 +22,93 @@ const STATUS = {
   FAILED:     'failed',
 };
 
-const jobs    = new Map();
-const pending = [];   // pull-mode için (Colab poll ederse)
-const axios   = require('axios');
+const MAX_ATTEMPTS          = parseInt(process.env.JOB_MAX_ATTEMPTS, 10)       || 3;
+const PROCESSING_TIMEOUT_MS = (parseInt(process.env.JOB_TIMEOUT_SECONDS, 10)   || 720)  * 1000; // 12 dk
+const PENDING_TIMEOUT_MS    = (parseInt(process.env.PENDING_TIMEOUT_SECONDS, 10) || 1800) * 1000; // 30 dk
+const KEEP_FINISHED_MS      = 2 * 60 * 60 * 1000; // bitmiş işleri 2 saat tut
 
-// Dinamik Colab URL getter (colab_register modülünden)
+const jobs    = new Map();
+const pending = [];          // PENDING iş kimlikleri (tekrarsız)
+let   flushing = false;
+
+// ── Yardımcılar ──────────────────────────────────────────────
+function _registry() {
+  try { return require('../routes/colab_register'); } catch { return null; }
+}
 function _getColabUrl() {
-  try {
-    const { getColabUrl } = require('../routes/colab_register');
-    return getColabUrl() || process.env.COLAB_URL || null;
-  } catch {
-    return process.env.COLAB_URL || null;
-  }
+  const r = _registry();
+  return (r && r.getColabUrl()) || process.env.COLAB_URL || null;
+}
+function _isColabAlive() {
+  const r = _registry();
+  return r ? r.isColabAlive() : !!process.env.COLAB_URL;
+}
+function _addPending(jobId) {
+  if (!pending.includes(jobId)) pending.push(jobId);
+}
+function _removePending(jobId) {
+  const i = pending.indexOf(jobId);
+  if (i >= 0) pending.splice(i, 1);
 }
 
+// ── Colab'a gönder ───────────────────────────────────────────
+// true  → iş işlendi (gönderildi VEYA kalıcı olarak başarısız/yeniden kuyruğa alındı)
+// false → Colab adresi yok, iş PENDING kalmalı
 async function _pushToColab(job) {
   const colabUrl = _getColabUrl();
   if (!colabUrl) return false;
 
-  const colabBase = colabUrl.replace(/\/$/, '').replace(/\/process$/, '');
-  const endpoint  = job.scenario === 2
-    ? `${colabBase}/process-s2`
-    : `${colabBase}/process`;
+  const endpoint = `${colabUrl.replace(/\/+$/, '').replace(/\/process$/, '')}/process`;
 
-  console.log(`🚀 [Queue] Colab'a PUSH (${job.scenario === 2 ? 'S2' : 'S1'}): ${job.job_id} → ${endpoint}`);
+  job.status    = STATUS.PROCESSING;
+  job.attempts  = (job.attempts || 0) + 1;
+  job.updatedAt = Date.now();
+  _removePending(job.job_id);
+
+  console.log(`🚀 [Queue] Colab'a PUSH (${job.attempts}/${MAX_ATTEMPTS}): ${job.job_id}`);
 
   try {
-    job.status    = STATUS.PROCESSING;
-    job.updatedAt = Date.now();
-    jobs.set(job.job_id, job);
-
-    axios.post(endpoint, {
-      job_id:           job.job_id,
-      lyrics:           job.processedLyrics,
-      genre:            job.genre,
-      gender:           job.gender,
-      duration:         job.duration,
-      secret:           process.env.COLAB_SECRET,
-      custom_prompt:    job.sunoStylePrompt || null,
-      melody_ref_path:  job.melodyRefPath   || null,  // v5: melodi conditioning
-      voice_ref_path:   job.voiceRefPath    || null,  // v5: ses klonu referansı
-      scenario:         job.scenario || 1,
-    }, { timeout: 30000 }).catch(err => {
-      console.error(`❌ [Queue] Colab PUSH hatası (${job.job_id}): ${err.message}`);
-      // PUSH hatasında PENDING'e geri al — bir sonraki bağlantıda tekrar dene
-      const j = jobs.get(job.job_id);
-      if (j && j.status === STATUS.PROCESSING) {
-        j.status    = STATUS.PENDING;
-        j.updatedAt = Date.now();
-        pending.push(job.job_id);  // tekrar kuyruğa ekle
-        jobs.set(job.job_id, j);
-      }
+    await axios.post(endpoint, {
+      job_id:          job.job_id,
+      lyrics:          job.processedLyrics,
+      genre:           job.genre,
+      gender:          job.gender,
+      duration:        job.duration,
+      language:        job.language,
+      custom_prompt:   job.sunoStylePrompt || null,
+      melody_ref_path: job.melodyRefPath   || null,
+      voice_ref_path:  job.voiceRefPath    || null,
+    }, {
+      timeout: 30000,
+      headers: {
+        'X-Colab-Secret': process.env.COLAB_SECRET || '',
+        'ngrok-skip-browser-warning': '1',
+      },
     });
     return true;
   } catch (err) {
-    console.error(`❌ [Queue] PUSH hazırlık hatası: ${err.message}`);
-    return false;
+    const code = err.response && err.response.status;
+    console.error(`❌ [Queue] Colab PUSH hatası (${job.job_id}): ${code || ''} ${err.message}`);
+
+    if (code === 401 || code === 403) {
+      fail(job.job_id, 'Colab secret uyuşmuyor — Colab ve Render’daki COLAB_SECRET aynı olmalı.');
+      return true;
+    }
+    if (job.attempts >= MAX_ATTEMPTS) {
+      fail(job.job_id, `Colab’a ulaşılamadı (${MAX_ATTEMPTS} deneme). Colab hücresi açık mı?`);
+      return true;
+    }
+    // Geçici hata: PENDING'e geri al, sonraki süpürmede tekrar denenecek
+    job.status    = STATUS.PENDING;
+    job.updatedAt = Date.now();
+    _addPending(job.job_id);
+    return true;
   }
 }
 
-async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics, lyricsProvider, sunoStylePrompt, voiceRefPath, melodyRefPath }) {
+// ── Kuyruk API'si ────────────────────────────────────────────
+async function enqueue({ jobId, lyrics, processedLyrics, genre, gender, duration, language,
+                         lyricsProvider, sunoStylePrompt, voiceRefPath, melodyRefPath }) {
   const job = {
     job_id:          jobId,
     status:          STATUS.PENDING,
@@ -83,71 +117,68 @@ async function enqueue({ jobId, lyrics, genre, gender, duration, processedLyrics
     genre,
     gender,
     duration,
+    language:        language || 'tr',
     lyricsProvider,
     sunoStylePrompt: sunoStylePrompt || null,
-    voiceRefPath:    voiceRefPath    || null,   // v5: ses klonu referansı
-    melodyRefPath:   melodyRefPath   || null,   // v5: melodi conditioning
+    voiceRefPath:    voiceRefPath    || null,
+    melodyRefPath:   melodyRefPath   || null,
+    attempts:        0,
     createdAt:       Date.now(),
     updatedAt:       Date.now(),
     audioUrl:        null,
     error:           null,
   };
   jobs.set(jobId, job);
+  _addPending(jobId);
   console.log(`📥 [Queue] Eklendi: ${jobId}`);
 
-  const pushed = await _pushToColab(job);
-
-  if (!pushed) {
-    // [FIX-1] Colab yoksa FAILED değil PENDING — pull-mode kuyruğuna ekle
-    console.warn(`⚠️ [Queue] Colab URL bulunamadı — ${jobId} PENDING kalıyor (Colab bağlantısı bekleniyor)`);
-    console.warn(`   → Colab hücresini çalıştır, URL /api/colab/register ile otomatik kaydedilir.`);
-    pending.push(jobId);
+  try {
+    const handled = await _pushToColab(job);
+    if (!handled) {
+      console.warn(`⚠️ [Queue] Colab adresi yok — ${jobId} PENDING (Colab bağlanınca gönderilecek)`);
+    }
+  } catch (e) {
+    console.error(`❌ [Queue] enqueue hatası: ${e.message}`);
   }
-
   return job;
 }
 
-// Yeni Colab bağlandığında bekleyen işleri push et
+/** PENDING işleri Colab'a gönder (Colab bağlandığında / süpürmede çağrılır) */
 async function flushPending() {
-  if (pending.length === 0) return 0;
-  const colabUrl = _getColabUrl();
-  if (!colabUrl) return 0;
-
+  if (flushing || pending.length === 0) return 0;
+  if (!_getColabUrl()) return 0;
+  flushing = true;
   let pushed = 0;
-  const toProcess = [...pending];
-  pending.length = 0;  // önce boşalt
-
-  for (const jobId of toProcess) {
-    const job = jobs.get(jobId);
-    if (!job || job.status !== STATUS.PENDING) continue;
-    const ok = await _pushToColab(job);
-    if (ok) pushed++;
-    else pending.push(jobId);  // başarısız ise geri koy
+  try {
+    for (const jobId of [...pending]) {
+      const job = jobs.get(jobId);
+      if (!job || job.status !== STATUS.PENDING) { _removePending(jobId); continue; }
+      const ok = await _pushToColab(job);
+      if (ok && job.status === STATUS.PROCESSING) pushed++;
+    }
+  } finally {
+    flushing = false;
   }
-
-  if (pushed > 0) {
-    console.log(`🚀 [Queue] ${pushed} bekleyen iş Colab'a push edildi (flushPending)`);
-  }
+  if (pushed > 0) console.log(`🚀 [Queue] ${pushed} bekleyen iş Colab'a gönderildi`);
   return pushed;
 }
 
-function dequeue() {
-  while (pending.length > 0) {
-    const jobId = pending.shift();
-    const job   = jobs.get(jobId);
-    if (!job || job.status !== STATUS.PENDING) continue;
-    job.status    = STATUS.PROCESSING;
+/** Yeni Colab oturumu: eski oturumda 'processing' kalan işleri yeniden kuyruğa al */
+function requeueProcessing() {
+  let n = 0;
+  for (const job of jobs.values()) {
+    if (job.status !== STATUS.PROCESSING) continue;
+    if ((job.attempts || 0) >= MAX_ATTEMPTS) {
+      fail(job.job_id, 'Colab oturumu kapandı ve deneme hakkı bitti. Şarkıyı tekrar oluşturun.');
+      continue;
+    }
+    job.status    = STATUS.PENDING;
     job.updatedAt = Date.now();
-    jobs.set(jobId, job);
-    return {
-      job_id:   job.job_id,
-      lyrics:   job.processedLyrics,
-      genre:    job.genre,
-      gender:   job.gender,
-      duration: job.duration,
-    };
+    _addPending(job.job_id);
+    n++;
   }
-  return null;
+  if (n > 0) console.log(`♻️  [Queue] ${n} iş yeniden kuyruğa alındı (yeni Colab oturumu)`);
+  return n;
 }
 
 function complete(jobId, audioUrl) {
@@ -155,9 +186,10 @@ function complete(jobId, audioUrl) {
   if (!job) return false;
   job.status    = STATUS.COMPLETED;
   job.audioUrl  = audioUrl;
+  job.error     = null;
   job.updatedAt = Date.now();
-  jobs.set(jobId, job);
-  console.log(`✅ [Queue] Tamamlandı: ${jobId} → ${audioUrl}`);
+  _removePending(jobId);
+  console.log(`✅ [Queue] Tamamlandı: ${jobId}`);
   return true;
 }
 
@@ -167,7 +199,7 @@ function fail(jobId, errorMsg) {
   job.status    = STATUS.FAILED;
   job.error     = errorMsg;
   job.updatedAt = Date.now();
-  jobs.set(jobId, job);
+  _removePending(jobId);
   console.error(`❌ [Queue] Başarısız: ${jobId} — ${errorMsg}`);
   return true;
 }
@@ -182,23 +214,28 @@ function stats() {
     total:        all.length,
     pendingQueue: pending.length,
     byStatus,
-    colabUrl:     _getColabUrl() || 'BAĞLI DEĞİL',
+    colabAlive:   _isColabAlive(),
   };
 }
 
-function cleanup(maxAgeMs = 2 * 60 * 60 * 1000) {
-  const cutoff = Date.now() - maxAgeMs;
-  let removed  = 0;
-  for (const [id, job] of jobs.entries()) {
-    if (job.updatedAt < cutoff && job.status !== STATUS.PROCESSING) {
-      jobs.delete(id);
-      removed++;
+/** Periyodik bakım: zaman aşımı, bekleyenleri gönder, eskileri sil */
+async function sweep() {
+  const now = Date.now();
+  for (const job of jobs.values()) {
+    if (job.status === STATUS.PROCESSING && now - job.updatedAt > PROCESSING_TIMEOUT_MS) {
+      fail(job.job_id, 'Zaman aşımı: Colab sonuç göndermedi. Colab oturumu kapanmış olabilir, tekrar deneyin.');
+    } else if (job.status === STATUS.PENDING && now - job.createdAt > PENDING_TIMEOUT_MS) {
+      fail(job.job_id, 'Colab 30 dakikadır bağlanmadı. Colab hücresini çalıştırıp tekrar deneyin.');
+    } else if ((job.status === STATUS.COMPLETED || job.status === STATUS.FAILED) && now - job.updatedAt > KEEP_FINISHED_MS) {
+      jobs.delete(job.job_id);
     }
   }
-  if (removed > 0) console.log(`🧹 [Queue] ${removed} eski iş temizlendi`);
-  return removed;
+  if (pending.length > 0 && _isColabAlive()) {
+    await flushPending();
+  }
 }
 
-setInterval(() => cleanup(), 30 * 60 * 1000);
+const _timer = setInterval(() => { sweep().catch(e => console.error('sweep hatası:', e.message)); }, 30 * 1000);
+if (_timer.unref) _timer.unref();
 
-module.exports = { STATUS, enqueue, dequeue, complete, fail, get, stats, flushPending };
+module.exports = { STATUS, enqueue, complete, fail, get, stats, flushPending, requeueProcessing, sweep };

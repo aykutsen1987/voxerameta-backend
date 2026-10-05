@@ -1,59 +1,79 @@
 // ============================================================
-// VoxeraMeta — Colab URL Kayıt Endpoint'i v4.2
+// VoxeraMeta — Colab URL Kayıt + Heartbeat v5.1
 //
-// v4.2: Colab register olduğunda bekleyen işleri otomatik flush et
+//   POST /api/colab/register  { colab_url }   (secret: X-Colab-Secret başlığı)
+//   GET  /api/colab/status
+//
+// Colab her ~2 dakikada bir bu endpoint'i tekrar çağırır (heartbeat).
+// Böylece Render yeniden başlasa bile Colab adresini yeniden öğrenir ve
+// "Colab bağlı mı?" sorusuna güvenilir cevap verebilir.
 // ============================================================
 'use strict';
 
 const express = require('express');
 const router  = express.Router();
+const { requireColabSecret } = require('../utils/security');
 
-let _colabUrl = process.env.COLAB_URL || null;
+let _colabUrl  = process.env.COLAB_URL || null;
+let _lastSeen  = 0;   // ms — Colab'dan gelen son kayıt/heartbeat
+const ALIVE_MS = (parseInt(process.env.COLAB_ALIVE_SECONDS, 10) || 360) * 1000;
 
-// Colab → Render: URL bildir
-// POST /api/colab/register  { colab_url, secret }
-router.post('/register', express.json(), async (req, res) => {
-  const secret = req.body.secret || req.headers['x-colab-secret'];
-  if (!secret || secret !== process.env.COLAB_SECRET) {
-    console.warn(`⛔ [Colab Register] Yetkisiz istek — IP: ${req.ip}`);
-    return res.status(401).json({ error: 'Geçersiz secret' });
+function getColabUrl() { return _colabUrl; }
+
+/** Colab son birkaç dakika içinde haber verdi mi? */
+function isColabAlive() {
+  return !!_colabUrl && (Date.now() - _lastSeen) < ALIVE_MS;
+}
+
+function lastSeenSecondsAgo() {
+  return _lastSeen ? Math.round((Date.now() - _lastSeen) / 1000) : null;
+}
+
+function normalizeUrl(raw) {
+  let u = String(raw || '').trim().replace(/\/+$/, '').replace(/\/process$/, '');
+  try {
+    const parsed = new URL(u);
+    const isLocal = ['localhost', '127.0.0.1'].includes(parsed.hostname);
+    if (parsed.protocol !== 'https:' && !(isLocal && process.env.NODE_ENV !== 'production')) return null;
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return null;
   }
+}
 
-  const newUrl = (req.body.colab_url || '').trim()
-    .replace(/\/$/, '')
-    .replace(/\/process$/, '');
-  if (!newUrl.startsWith('http')) {
-    return res.status(400).json({ error: 'Geçersiz colab_url' });
-  }
+// Colab → Render: URL bildir / heartbeat
+router.post('/register', express.json(), requireColabSecret, async (req, res) => {
+  const newUrl = normalizeUrl(req.body && req.body.colab_url);
+  if (!newUrl) return res.status(400).json({ error: 'Geçersiz colab_url (https olmalı)' });
 
+  const changed = newUrl !== _colabUrl;
   _colabUrl = newUrl;
+  _lastSeen = Date.now();
   process.env.COLAB_URL = newUrl;
-  console.log(`✅ [Colab Register] URL güncellendi → ${newUrl}`);
 
-  // [FIX] Yeni Colab bağlandığında bekleyen işleri otomatik push et
+  let flushed = 0, requeued = 0;
   try {
     const queue = require('../services/jobQueue');
-    const flushed = await queue.flushPending();
-    if (flushed > 0) {
-      console.log(`📤 [Colab Register] ${flushed} bekleyen iş Colab'a iletildi`);
-    }
+    // Yeni bir Colab oturumu başladıysa eski oturumda "processing" kalan işler kaybolmuştur
+    if (changed) requeued = queue.requeueProcessing();
+    flushed = await queue.flushPending();
   } catch (e) {
-    console.warn(`⚠️  [Colab Register] flushPending hatası: ${e.message}`);
+    console.warn(`⚠️  [Colab Register] kuyruk işlemi hatası: ${e.message}`);
   }
 
-  res.json({ ok: true, colab_url: newUrl });
+  if (changed) console.log(`✅ [Colab Register] Yeni Colab oturumu → ${newUrl} (flush=${flushed}, requeue=${requeued})`);
+  res.json({ ok: true, changed, flushed, requeued });
 });
 
-// Mevcut URL'i öğren (debug)
+// Durum (debug) — tam adresi dışarı vermez
 router.get('/status', (req, res) => {
   res.json({
-    colab_url:        _colabUrl || null,
-    connected:        !!_colabUrl,
+    connected:        isColabAlive(),
+    colab_url_set:    !!_colabUrl,
+    last_seen_sec:    lastSeenSecondsAgo(),
     colab_secret_set: !!process.env.COLAB_SECRET,
     base_url:         process.env.BASE_URL || null,
   });
 });
 
-function getColabUrl() { return _colabUrl; }
-
-module.exports = { router, getColabUrl };
+module.exports = { router, getColabUrl, isColabAlive, lastSeenSecondsAgo };

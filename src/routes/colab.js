@@ -1,82 +1,99 @@
 // ============================================================
-// VoxeraMeta — Colab Worker Endpoint'leri (Push Mimarisi)
+// VoxeraMeta — Colab Worker Endpoint'leri (Push Mimarisi) v5.1
 //
-// Bu route'lar SADECE Colab worker'ı içindir.
+//   POST /api/colab/callback   → Colab bitmiş mp3'ü gönderir
+//   POST /api/colab/error      → Colab hata bildirir
 //
-//   POST /api/colab/callback   → Colab ses dosyasını gönderir (job-done yerine)
-//   POST /api/colab/error      → Colab hata bildirir (job-error yerine)
+// v5.1 GÜVENLİK DÜZELTMELERİ:
+//   - Secret kontrolü dosya yazılmadan ÖNCE yapılır (eskiden sonra yapılıyordu)
+//   - Dosya adı yalnızca doğrulanmış UUID'den üretilir (path traversal kapatıldı)
+//   - İş kimliği başlıktan (X-Job-Id) okunur ve kuyrukta var olmalıdır
+//   - Yüklenen dosyanın gerçekten mp3 olup olmadığı kontrol edilir
 // ============================================================
 'use strict';
-const express  = require('express');
-const router   = express.Router();
-const path     = require('path');
-const fs       = require('fs');
-const multer   = require('multer');
-const queue    = require('../services/jobQueue');
+
+const express = require('express');
+const router  = express.Router();
+const path    = require('path');
+const fs      = require('fs');
+const multer  = require('multer');
+const queue   = require('../services/jobQueue');
+const { requireColabSecret, isValidJobId } = require('../utils/security');
 
 const SONGS_DIR = process.env.LOCAL_STORAGE_PATH || '/tmp/voxerameta-songs';
 if (!fs.existsSync(SONGS_DIR)) fs.mkdirSync(SONGS_DIR, { recursive: true });
 
-// ── Multer: Colab'dan gelen ses dosyası için ─────────────────
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: SONGS_DIR,
-    filename: (req, file, cb) => {
-      const jobId = req.body.job_id || 'unknown';
-      cb(null, `${jobId}.mp3`);
-    },
-  }),
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
-});
-
-// ── Secret kontrolü middleware ────────────────────────────────
-function colabAuth(req, res, next) {
-  const secret = req.body.secret || req.headers['x-colab-secret'];
-  if (!secret || secret !== process.env.COLAB_SECRET) {
-    console.warn(`⛔ [Colab] Yetkisiz istek — IP: ${req.ip}`);
-    return res.status(401).json({ error: 'Geçersiz Colab secret' });
+// ── İş kimliğini doğrula (multer'dan ÖNCE) ───────────────────
+function prepareCallback(req, res, next) {
+  const jobId = req.headers['x-job-id'];
+  if (!isValidJobId(jobId)) {
+    return res.status(400).json({ error: 'X-Job-Id başlığı geçerli bir UUID olmalı' });
   }
+  const job = queue.get(jobId);
+  if (!job) {
+    return res.status(404).json({ error: `İş bulunamadı: ${jobId}` });
+  }
+  if (job.status === 'completed') {
+    return res.status(409).json({ error: 'İş zaten tamamlanmış' });
+  }
+  req.colabJobId = jobId;
   next();
 }
 
-// ── POST /api/colab/callback ──────────────────────────────────
-// Colab pipeline tamamlandı, ses dosyasını gönderdi
-router.post('/callback', upload.single('audio'), colabAuth, (req, res) => {
-  const jobId = req.body.job_id;
-  if (!jobId) {
-    return res.status(400).json({ error: 'job_id gerekli' });
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: SONGS_DIR,
+    filename: (req, file, cb) => cb(null, `${req.colabJobId}.mp3`),
+  }),
+  limits: { fileSize: 50 * 1024 * 1024, files: 1 }, // 50 MB
+});
+
+// mp3 başlığı: "ID3" etiketi veya 0xFF 0xEx frame sync
+function looksLikeMp3(filePath) {
+  try {
+    const fd  = fs.openSync(filePath, 'r');
+    const buf = Buffer.alloc(3);
+    fs.readSync(fd, buf, 0, 3, 0);
+    fs.closeSync(fd);
+    const isId3  = buf.toString('latin1') === 'ID3';
+    const isSync = buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0;
+    return isId3 || isSync;
+  } catch {
+    return false;
   }
+}
+
+// ── POST /api/colab/callback ──────────────────────────────────
+router.post('/callback', requireColabSecret, prepareCallback, upload.single('audio'), (req, res) => {
   if (!req.file) {
-    return res.status(400).json({ error: 'audio dosyası gerekli' });
+    return res.status(400).json({ error: 'audio dosyası gerekli (alan adı: audio)' });
+  }
+  if (req.file.size < 1024 || !looksLikeMp3(req.file.path)) {
+    try { fs.unlinkSync(req.file.path); } catch {}
+    return res.status(400).json({ error: 'Yüklenen dosya geçerli bir mp3 değil' });
   }
 
-  const filename = req.file.filename;
-  // BASE_URL yoksa host'tan otomatik türet — Render'da RENDER_EXTERNAL_URL set edilir
-  const baseUrl  = (
+  const baseUrl = (
     process.env.BASE_URL ||
     process.env.RENDER_EXTERNAL_URL ||
     `${req.protocol}://${req.get('host')}`
   ).replace(/\/$/, '');
-  const audioUrl = `${baseUrl}/songs/${filename}`;
-  console.log(`🔗 [Colab] audioUrl oluşturuldu: ${audioUrl}`);
+  const audioUrl = `${baseUrl}/songs/${req.file.filename}`;
 
-  const ok = queue.complete(jobId, audioUrl);
-  if (!ok) {
-    return res.status(404).json({ error: `İş bulunamadı: ${jobId}` });
-  }
-
-  console.log(`✅ [Colab Route] callback: ${jobId} → ${audioUrl}`);
+  queue.complete(req.colabJobId, audioUrl);
+  console.log(`✅ [Colab Route] callback: ${req.colabJobId} → ${audioUrl}`);
   res.json({ ok: true, audioUrl });
 });
 
 // ── POST /api/colab/error ─────────────────────────────────────
-// Colab pipeline hatası bildirdi
-router.post('/error', express.json(), colabAuth, (req, res) => {
+router.post('/error', express.json(), requireColabSecret, (req, res) => {
   const { job_id, error } = req.body || {};
-  if (!job_id) return res.status(400).json({ error: 'job_id gerekli' });
+  if (!isValidJobId(job_id)) return res.status(400).json({ error: 'job_id geçerli bir UUID olmalı' });
 
-  queue.fail(job_id, error || 'Bilinmeyen Colab hatası');
-  console.error(`❌ [Colab Route] error: ${job_id} — ${error}`);
+  const msg = String(error || 'Bilinmeyen Colab hatası').slice(0, 500);
+  if (!queue.fail(job_id, msg)) return res.status(404).json({ error: 'İş bulunamadı' });
+
+  console.error(`❌ [Colab Route] error: ${job_id} — ${msg}`);
   res.json({ ok: true });
 });
 

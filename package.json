@@ -1,10 +1,11 @@
 {
   "name": "voxerameta-backend",
-  "version": "4.0.0",
-  "description": "VoxeraMeta — Async Queue Mimarisi (Colab Worker + Render)",
+  "version": "5.1.0",
+  "description": "VoxeraMeta — Android → Render (kuyruk) → Colab (ACE-Step)",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "test": "node test/e2e.js",
     "dev": "nodemon src/server.js"
   },
   "engines": { "node": ">=18.0.0" },

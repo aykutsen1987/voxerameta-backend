@@ -36,43 +36,30 @@ ${lyrics}`;
 }
 
 // ── 1. GROQ (Ücretsiz — 1.000/gün) ───────────────────────────
-// NOT: llama-3.3-70b-versatile Groq tarafindan kaldirildi (16.08.2026).
-// Birincil: openai/gpt-oss-120b, yedek: qwen/qwen3.6-27b.
-const GROQ_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.6-27b'];
-
 async function processWithGroq(lyrics, genre) {
   if (!process.env.GROQ_API_KEY) throw new Error('GROQ_API_KEY eksik');
 
-  let lastError = null;
-  for (const model of GROQ_MODELS) {
-    try {
-      const res = await axios.post(
-        'https://api.groq.com/openai/v1/chat/completions',
-        {
-          model,
-          messages: [{ role: 'user', content: buildLyricsPrompt(lyrics, genre) }],
-          max_tokens: 1500,
-          temperature: 0.8
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 20000
-        }
-      );
-
-      const text = res.data?.choices?.[0]?.message?.content;
-      if (!text) throw new Error('Groq boş yanıt döndürdü');
-      console.log(`✅ Groq (${model}) lyrics işlemi başarılı`);
-      return { text, provider: `groq_${model.replace(/[^a-z0-9]/gi, '_')}`, model };
-    } catch (err) {
-      console.warn(`⚠️  Groq ${model} başarısız: ${err.message}`);
-      lastError = err;
+  const res = await axios.post(
+    'https://api.groq.com/openai/v1/chat/completions',
+    {
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: buildLyricsPrompt(lyrics, genre) }],
+      max_tokens: 1500,
+      temperature: 0.8
+    },
+    {
+      headers: {
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 20000
     }
-  }
-  throw lastError || new Error('Groq tüm modeller başarısız');
+  );
+
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('Groq boş yanıt döndürdü');
+  console.log('✅ Groq lyrics işlemi başarılı');
+  return { text, provider: 'groq_llama33_70b', model: 'llama-3.3-70b-versatile' };
 }
 
 // ── 2. OPENROUTER :free Modeller (200/gün) ────────────────────
@@ -187,4 +174,54 @@ function buildMusicStylePrompt(genre, hasVoiceRef) {
     : base;
 }
 
-module.exports = { processLyrics, buildMusicStylePrompt, buildLyricsPrompt };
+// ── Sözleri DEĞİŞTİRMEDEN şarkı yapısı etiketleri ekle ─────────
+// Kullanıcının yazdığı şiir/söz aynen korunur; sadece [Verse 1], [Chorus] gibi
+// bölüm etiketleri eklenir (ACE-Step bu etiketleri kullanarak şarkı yapısını kurar).
+// Metinde zaten köşeli parantezli etiket varsa hiçbir şey yapılmaz.
+const MAX_LYRICS_CHARS = 4000;
+
+function structureLyrics(lyrics) {
+  let text = String(lyrics || '').replace(/\r\n?/g, '\n').trim();
+  if (!text) return text;
+  if (/\[[^\]\n]+\]/.test(text)) return text.slice(0, MAX_LYRICS_CHARS);
+
+  text = text.replace(/\n{3,}/g, '\n\n');
+  let stanzas = text.split(/\n\s*\n/).map(s => s.trim()).filter(Boolean);
+
+  // Tek blok halinde yazılmışsa 4'er satırlık kıtalara böl
+  if (stanzas.length === 1) {
+    const lines = stanzas[0].split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length >= 8) {
+      stanzas = [];
+      for (let i = 0; i < lines.length; i += 4) stanzas.push(lines.slice(i, i + 4).join('\n'));
+    }
+  }
+
+  const n = stanzas.length;
+  let verse = 1;
+  const tagged = stanzas.map((st, i) => {
+    let tag;
+    if (i === 0)                    tag = 'Verse 1';
+    else if (n >= 4 && i === n - 1) tag = 'Outro';
+    else if (n >= 5 && i === 3)     tag = 'Bridge';
+    else if (i % 2 === 1)           tag = 'Chorus';
+    else                            tag = `Verse ${++verse}`;
+    return `[${tag}]\n${st}`;
+  });
+
+  return tagged.join('\n\n').slice(0, MAX_LYRICS_CHARS);
+}
+
+// ── Ana giriş: LYRICS_MODE=preserve (varsayılan) | rewrite ────────
+//   preserve : sözler aynen kalır, sadece bölüm etiketleri eklenir (ücretsiz, kota yok)
+//   rewrite  : eski davranış — LLM zinciri (Groq→OpenRouter→Gemini) sözleri şarkıya uyarlar
+async function prepareLyrics(lyrics, genre) {
+  const mode = (process.env.LYRICS_MODE || 'preserve').toLowerCase();
+  if (mode === 'rewrite') {
+    const r = await processLyrics(lyrics, genre);
+    return { text: r.text, provider: r.provider };
+  }
+  return { text: structureLyrics(lyrics), provider: 'preserve' };
+}
+
+module.exports = { processLyrics, prepareLyrics, structureLyrics, buildMusicStylePrompt, buildLyricsPrompt };
