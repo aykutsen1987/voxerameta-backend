@@ -21,7 +21,9 @@ const queue = require('../services/jobQueue');
 const { isColabAlive } = require('./colab_register');
 
 const MAX_LYRICS_CHARS  = 4000;
-const MAX_SONG_SECONDS  = parseInt(process.env.MAX_SONG_SECONDS, 10) || 180;
+// Uygulama 2-5 dk (120-300 sn) sunar. Sunucu bu aralığın dışındaki değerleri sıkıştırır.
+const MIN_SONG_SECONDS  = parseInt(process.env.MIN_SONG_SECONDS, 10) || 120;
+const MAX_SONG_SECONDS  = parseInt(process.env.MAX_SONG_SECONDS, 10) || 300;
 
 function _baseUrl() {
   return (
@@ -100,7 +102,7 @@ router.post('/generate-song', async (req, res) => {
   const {
     lyrics,
     genre           = 'POP',
-    duration        = 30,
+    duration        = 120,
     gender          = 'male',
     language        = 'tr',
     theme           = 'Happy',
@@ -128,7 +130,7 @@ router.post('/generate-song', async (req, res) => {
   const safeGender = ['male', 'female'].includes(String(gender || '').toLowerCase())
     ? String(gender).toLowerCase() : 'male';
   const safeGenre  = String(genre || 'POP').toUpperCase().replace(/[^A-Z_]/g, '').slice(0, 20) || 'POP';
-  const safeDur    = Math.max(10, Math.min(Number(duration) || 60, MAX_SONG_SECONDS));
+  const safeDur    = Math.max(MIN_SONG_SECONDS, Math.min(Number(duration) || MIN_SONG_SECONDS, MAX_SONG_SECONDS));
   const safeLang   = ['tr', 'en'].includes(String(language || '').toLowerCase())
     ? String(language).toLowerCase() : 'tr';
 
@@ -205,8 +207,10 @@ router.get('/song-status', (req, res) => {
       lyricsProvider:  job.lyricsProvider,
       processedLyrics: job.processedLyrics,
       processingTime,
-      hasVoice:        true,
+      hasVoice:        !!job.voiceRefPath,
+      hasMelody:       !!job.melodyRefPath,
       singingMode:     true,
+      warning:         job.note || null,   // örn. "Ses/melodi işlenemedi, sözle üretildi"
       message:         `✅ Şarkı hazır! (${Math.round(processingTime / 1000)}s)`,
     });
   }

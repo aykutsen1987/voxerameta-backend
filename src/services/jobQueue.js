@@ -23,7 +23,7 @@ const STATUS = {
 };
 
 const MAX_ATTEMPTS          = parseInt(process.env.JOB_MAX_ATTEMPTS, 10)       || 3;
-const PROCESSING_TIMEOUT_MS = (parseInt(process.env.JOB_TIMEOUT_SECONDS, 10)   || 720)  * 1000; // 12 dk
+const PROCESSING_TIMEOUT_MS = (parseInt(process.env.JOB_TIMEOUT_SECONDS, 10)   || 3000) * 1000; // 50 dk (5 dk'lık şarkı + kontrol/yeniden deneme)
 const PENDING_TIMEOUT_MS    = (parseInt(process.env.PENDING_TIMEOUT_SECONDS, 10) || 1800) * 1000; // 30 dk
 const KEEP_FINISHED_MS      = 2 * 60 * 60 * 1000; // bitmiş işleri 2 saat tut
 
@@ -181,11 +181,12 @@ function requeueProcessing() {
   return n;
 }
 
-function complete(jobId, audioUrl) {
+function complete(jobId, audioUrl, note = null) {
   const job = jobs.get(jobId);
   if (!job) return false;
   job.status    = STATUS.COMPLETED;
   job.audioUrl  = audioUrl;
+  job.note      = note || null;
   job.error     = null;
   job.updatedAt = Date.now();
   _removePending(jobId);

@@ -80,7 +80,9 @@ router.post('/callback', requireColabSecret, prepareCallback, upload.single('aud
   ).replace(/\/$/, '');
   const audioUrl = `${baseUrl}/songs/${req.file.filename}`;
 
-  queue.complete(req.colabJobId, audioUrl);
+  let note = null;
+  try { note = decodeURIComponent(String(req.headers['x-voxera-note'] || '')).slice(0, 300) || null; } catch { note = null; }
+  queue.complete(req.colabJobId, audioUrl, note);
   console.log(`✅ [Colab Route] callback: ${req.colabJobId} → ${audioUrl}`);
   res.json({ ok: true, audioUrl });
 });

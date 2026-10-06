@@ -20,8 +20,12 @@ services:
         value: /tmp/voxerameta-songs
       - key: MAX_REQUESTS_PER_MINUTE
         value: 20
+      - key: MAX_SONG_SECONDS
+        value: 300           # uygulama 2-5 dk sunar
+      - key: JOB_TIMEOUT_SECONDS
+        value: 3000          # 5 dk'lık şarkı + Whisper kontrolü için 50 dk
       - key: API_AUTH_TOKEN
-        sync: false          # İSTEĞE BAĞLI — boş bırakın
+        sync: false          # BOŞ BIRAKIN / SİLİN. Doluysa uygulama aynı token'ı gönderemezse 401 alır
       - key: GROQ_API_KEY
         sync: false          # yalnızca LYRICS_MODE=rewrite için
       - key: OPENROUTER_API_KEY
