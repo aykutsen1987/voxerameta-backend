@@ -21,9 +21,9 @@ const queue = require('../services/jobQueue');
 const { isColabAlive } = require('./colab_register');
 
 const MAX_LYRICS_CHARS  = 4000;
-// Uygulama 2-5 dk (120-300 sn) sunar. Sunucu bu aralığın dışındaki değerleri sıkıştırır.
-const MIN_SONG_SECONDS  = parseInt(process.env.MIN_SONG_SECONDS, 10) || 120;
-const MAX_SONG_SECONDS  = parseInt(process.env.MAX_SONG_SECONDS, 10) || 300;
+// Uygulama süreyi sözlerden otomatik hesaplar: 1:30-3:30 (90-210 sn). Sunucu bu aralığın dışındaki değerleri sıkıştırır.
+const MIN_SONG_SECONDS  = parseInt(process.env.MIN_SONG_SECONDS, 10) || 90;
+const MAX_SONG_SECONDS  = parseInt(process.env.MAX_SONG_SECONDS, 10) || 210;
 
 function _baseUrl() {
   return (

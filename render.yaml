@@ -20,8 +20,10 @@ services:
         value: /tmp/voxerameta-songs
       - key: MAX_REQUESTS_PER_MINUTE
         value: 20
+      - key: MIN_SONG_SECONDS
+        value: 90            # en az 1:30
       - key: MAX_SONG_SECONDS
-        value: 300           # uygulama 2-5 dk sunar
+        value: 210           # en çok 3:30 (süre sözlerden otomatik hesaplanır)
       - key: JOB_TIMEOUT_SECONDS
         value: 3000          # 5 dk'lık şarkı + Whisper kontrolü için 50 dk
       - key: API_AUTH_TOKEN
