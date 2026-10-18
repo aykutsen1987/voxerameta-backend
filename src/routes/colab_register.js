@@ -56,9 +56,10 @@ router.post('/register', express.json(), requireColabSecret, async (req, res) =>
   const newUrl = normalizeUrl(req.body && req.body.colab_url);
   if (!newUrl) return res.status(400).json({ error: 'Geçersiz colab_url (https olmalı)' });
 
-  const changed = newUrl !== _colabUrl;
-  const newMsg  = String((req.body && req.body.message) || '').trim().slice(0, 200);
-  if (changed || newMsg !== _message || !_activeSince) _activeSince = Date.now();
+  const changed  = newUrl !== _colabUrl;
+  const wasAlive = isColabAlive();   // heartbeat kesilmişse (Colab kapanıp aynı adresle geri geldiyse) yeni aktivasyon sayılır
+  const newMsg   = String((req.body && req.body.message) || '').trim().slice(0, 200);
+  if (changed || !wasAlive || newMsg !== _message || !_activeSince) _activeSince = Date.now();
   _message  = newMsg;
   _colabUrl = newUrl;
   _lastSeen = Date.now();
