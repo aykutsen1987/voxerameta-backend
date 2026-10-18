@@ -18,7 +18,7 @@ let _colabUrl  = process.env.COLAB_URL || null;
 let _lastSeen  = 0;   // ms — Colab'dan gelen son kayıt/heartbeat
 let _message   = '';  // Colab hücresindeki APP_MESSAGE (uygulamada gösterilir)
 let _activeSince = 0; // ms — Colab oturumu / mesaj en son ne zaman değişti (uygulama mesajı bir kez göstersin diye)
-const DEFAULT_MESSAGE = 'Colab aktif! Şarkı üretebilirsiniz 🎵';
+const DEFAULT_MESSAGE = 'Sistem hazır! Şarkını şimdi oluşturabilirsin 🎵';
 const ALIVE_MS = (parseInt(process.env.COLAB_ALIVE_SECONDS, 10) || 360) * 1000;
 
 function getColabUrl() { return _colabUrl; }
