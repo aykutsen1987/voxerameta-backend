@@ -11,10 +11,12 @@ router.get('/health', (req, res) => {
   // Colab durumu: son heartbeat birkaç dakika içindeyse "bağlı"
   let colabConnected = false;
   let lastSeen       = null;
+  let announce       = { message: '', id: '' };
   try {
     const reg = require('../routes/colab_register');
     colabConnected = reg.isColabAlive();
     lastSeen       = reg.lastSeenSecondsAgo();
+    announce       = reg.getAnnouncement();
   } catch {}
 
   // Sözler artık varsayılan olarak LLM'siz hazırlanır; sağlık, Colab bağlantısına bağlıdır
@@ -28,6 +30,8 @@ router.get('/health', (req, res) => {
     allFree:        true,
     colabConnected,
     colabLastSeenSec: lastSeen,
+    colabMessage:     announce.message,   // uygulamada bir kez gösterilir
+    colabMessageId:   announce.id,
     colabSecret:    !!process.env.COLAB_SECRET,
     message:        `Colab: ${colabConnected ? '✅ Bağlı' : '❌ Bağlı değil'} | Söz modu: ${(process.env.LYRICS_MODE || 'preserve')}`,
   });

@@ -16,6 +16,9 @@ const { requireColabSecret } = require('../utils/security');
 
 let _colabUrl  = process.env.COLAB_URL || null;
 let _lastSeen  = 0;   // ms — Colab'dan gelen son kayıt/heartbeat
+let _message   = '';  // Colab hücresindeki APP_MESSAGE (uygulamada gösterilir)
+let _activeSince = 0; // ms — Colab oturumu / mesaj en son ne zaman değişti (uygulama mesajı bir kez göstersin diye)
+const DEFAULT_MESSAGE = 'Colab aktif! Şarkı üretebilirsiniz 🎵';
 const ALIVE_MS = (parseInt(process.env.COLAB_ALIVE_SECONDS, 10) || 360) * 1000;
 
 function getColabUrl() { return _colabUrl; }
@@ -23,6 +26,13 @@ function getColabUrl() { return _colabUrl; }
 /** Colab son birkaç dakika içinde haber verdi mi? */
 function isColabAlive() {
   return !!_colabUrl && (Date.now() - _lastSeen) < ALIVE_MS;
+}
+
+/** Uygulamaya gösterilecek duyuru: {message, id}. Colab bağlı değilse boş. */
+function getAnnouncement() {
+  if (!isColabAlive()) return { message: '', id: '' };
+  const message = _message || String(process.env.COLAB_MESSAGE || '').trim() || DEFAULT_MESSAGE;
+  return { message, id: String(_activeSince) };
 }
 
 function lastSeenSecondsAgo() {
@@ -47,6 +57,9 @@ router.post('/register', express.json(), requireColabSecret, async (req, res) =>
   if (!newUrl) return res.status(400).json({ error: 'Geçersiz colab_url (https olmalı)' });
 
   const changed = newUrl !== _colabUrl;
+  const newMsg  = String((req.body && req.body.message) || '').trim().slice(0, 200);
+  if (changed || newMsg !== _message || !_activeSince) _activeSince = Date.now();
+  _message  = newMsg;
   _colabUrl = newUrl;
   _lastSeen = Date.now();
   process.env.COLAB_URL = newUrl;
@@ -76,4 +89,4 @@ router.get('/status', (req, res) => {
   });
 });
 
-module.exports = { router, getColabUrl, isColabAlive, lastSeenSecondsAgo };
+module.exports = { router, getColabUrl, isColabAlive, lastSeenSecondsAgo, getAnnouncement };
